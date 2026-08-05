@@ -1,0 +1,29 @@
+## .NET
+bin/
+obj/
+out/
+
+## Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+## User secrets / local overrides (never commit real JWT keys or connection strings)
+appsettings.Local.json
+appsettings.*.local.json
+secrets.json
+
+## Test results
+TestResults/
+*.trx
+
+## OS files
+.DS_Store
+Thumbs.db
+
+## EF Core
+*.mdf
+*.ldf
+*.ndf

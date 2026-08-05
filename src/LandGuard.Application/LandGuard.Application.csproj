@@ -1,0 +1,41 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>LandGuard.Application</RootNamespace>
+    <AssemblyName>LandGuard.Application</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Object-to-DTO mapping for the Service Layer (Property -> PropertyDto, etc.) -->
+    <PackageReference Include="AutoMapper" Version="13.0.1" />
+
+    <!-- Request/DTO validation, run from controllers before a service method executes -->
+    <PackageReference Include="FluentValidation" Version="11.9.2" />
+    <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="11.9.2" />
+
+    <!--
+      Module 2: IApplicationDbContext exposes DbSet<T> for every LandGuardDB
+      table/view, so Application needs the DbSet<T> type. This is the one
+      accepted exception to "Application knows nothing about EF Core" - no
+      lighter-weight package defines DbSet<T> on its own, and Application
+      still writes no provider-specific code (no UseSqlServer, no
+      migrations, no raw SQL) - only LINQ against an abstraction.
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore" Version="8.0.10" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Application depends on Domain only (Dependency Inversion Principle):
+      it defines *interfaces* for everything it needs from the outside
+      world (IApplicationDbContext, IRepository<T>, ICurrentUserService,
+      IDateTimeService, and - in later modules - IOcrService,
+      IFraudDetectionEngine, IJwtTokenService). Infrastructure and API
+      depend on Application, never the reverse, so business/use-case
+      logic never becomes coupled to EF Core, ASP.NET Core, or any
+      specific OCR/JWT library.
+    -->
+    <ProjectReference Include="..\LandGuard.Domain\LandGuard.Domain.csproj" />
+  </ItemGroup>
+
+</Project>

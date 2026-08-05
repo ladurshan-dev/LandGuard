@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <RootNamespace>LandGuard.API</RootNamespace>
+    <AssemblyName>LandGuard.API</AssemblyName>
+    <UserSecretsId>landguard-api-2b6f1e2a-8e9d-4b7a-9c3e-landguard</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="8.0.10" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      API is the outermost layer (the "Composition Root" +
+      "Presentation") - it references both Application and Infrastructure
+      so it can wire concrete implementations to interfaces at startup,
+      but Application and Infrastructure never reference API. Controllers
+      depend only on Application-layer service interfaces/DTOs, never on
+      EF Core entities directly, so the HTTP contract stays decoupled
+      from the persistence model.
+    -->
+    <ProjectReference Include="..\LandGuard.Application\LandGuard.Application.csproj" />
+    <ProjectReference Include="..\LandGuard.Infrastructure\LandGuard.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

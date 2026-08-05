@@ -1,0 +1,53 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>LandGuard.Infrastructure</RootNamespace>
+    <AssemblyName>LandGuard.Infrastructure</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Infrastructure is a plain class library (Microsoft.NET.Sdk, not
+      .Web), but CurrentUserService needs IHttpContextAccessor and future
+      modules will need other ASP.NET Core abstractions. FrameworkReference
+      pulls in the shared framework's types without requiring the Web SDK,
+      which keeps this project usable outside a web host too (e.g. from a
+      console-based data-seeding tool for the Dummy Land Registry).
+    -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="8.0.10" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.10">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="8.0.10">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+
+    <!--
+      Module 2: Dapper executes the LandGuardDB stored procedures (see
+      Persistence/StoredProcedures). EF Core's FromSqlRaw/ExecuteSqlRaw
+      can't read a procedure's 2nd/3rd result set and is awkward with
+      output parameters - Dapper's QueryMultipleAsync and native output-
+      parameter support are the reason it sits alongside EF Core here
+      rather than hand-rolling the equivalent with raw ADO.NET.
+    -->
+    <PackageReference Include="Dapper" Version="2.1.35" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!--
+      Infrastructure depends on Application (to implement its interfaces)
+      and transitively on Domain. It must never be referenced by
+      Application or Domain - that inward-only dependency direction is
+      what makes it possible to swap SQL Server for another provider, or
+      mock persistence entirely in tests, without touching business logic.
+    -->
+    <ProjectReference Include="..\LandGuard.Application\LandGuard.Application.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,21 @@
+<Project>
+
+  <!--
+    Shared MSBuild settings for every project under src/. Centralizing
+    these here (instead of repeating them in each .csproj) guarantees
+    Domain, Application, Infrastructure and API all compile against the
+    same language version and nullability rules, and means a new project
+    added later only needs an SDK line and its own package/project
+    references to pick up the same baseline.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>LandGuard.Domain</RootNamespace>
+    <AssemblyName>LandGuard.Domain</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    Deliberately no PackageReferences here. The Domain layer sits at the
+    center of Clean Architecture's dependency graph - nothing may leak
+    into it (no EF Core, no ASP.NET Core, no third-party libraries) so
+    that entities, enums and business exceptions stay pure C# and are
+    reusable/testable without spinning up infrastructure.
+  -->
+
+</Project>
