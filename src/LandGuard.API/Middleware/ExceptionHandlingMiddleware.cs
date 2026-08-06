@@ -2,6 +2,7 @@ using System.Net;
 using System.Text.Json;
 using FluentValidation;
 using LandGuard.Domain.Exceptions;
+using Microsoft.Data.SqlClient;
 
 namespace LandGuard.API.Middleware;
 
@@ -83,6 +84,20 @@ public class ExceptionHandlingMiddleware
             UnauthorizedAccessException => (
                 HttpStatusCode.Forbidden,
                 "You are not authorized to perform this action.",
+                Enumerable.Empty<string>()),
+
+            // Module 3: stored procedures such as usp_User_Register and
+            // usp_User_ChangePassword enforce business rules with
+            // RAISERROR (duplicate email, duplicate/missing Seller NIC, an
+            // inactive account) rather than returning a Result - the
+            // driver surfaces those as SqlException. The message SQL
+            // Server raised is already written to read as a user-facing
+            // sentence (see database/Module3_ChangePassword.sql and
+            // Database/Scripts/04_StoredProcedures.sql), so it is safe to
+            // return directly instead of a generic 500.
+            SqlException sqlException => (
+                HttpStatusCode.BadRequest,
+                sqlException.Message,
                 Enumerable.Empty<string>()),
 
             _ => (

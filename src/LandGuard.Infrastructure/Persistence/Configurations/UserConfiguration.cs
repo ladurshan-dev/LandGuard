@@ -28,12 +28,14 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         // is kept as the C# name (see the enum's doc comment) and mapped to
         // "Admin" here, rather than renaming the enum member, so every other
         // layer can keep using the friendlier name.
+        //
+        // Module 3: the conversion itself now lives in UserRoleExtensions
+        // (Domain), the same helper the JWT token generator and
+        // usp_User_Register's @Role parameter use - one mapping, not three.
         builder.Property(u => u.Role)
             .HasColumnName("Role")
             .HasColumnType("varchar(20)")
-            .HasConversion(
-                role => role == UserRole.Administrator ? "Admin" : role.ToString(),
-                value => value == "Admin" ? UserRole.Administrator : Enum.Parse<UserRole>(value))
+            .HasConversion(role => role.ToDbValue(), value => UserRoleExtensions.FromDbValue(value))
             .IsRequired();
 
         builder.HasIndex(u => u.Email).IsUnique().HasDatabaseName("UQ_Users_Email");

@@ -37,6 +37,18 @@
       rather than hand-rolling the equivalent with raw ADO.NET.
     -->
     <PackageReference Include="Dapper" Version="2.1.35" />
+
+    <!--
+      Module 3 (Authentication): BCrypt.Net-Next hashes/verifies passwords
+      (matches the algorithm already used by every seeded password hash in
+      Module 2's seed data). System.IdentityModel.Tokens.Jwt builds and
+      signs the JWT itself in JwtTokenGenerator - Program.cs already
+      referenced Microsoft.IdentityModel.Tokens transitively for
+      *validating* incoming tokens (Module 1), but Infrastructure needs
+      its own reference to actually construct one.
+    -->
+    <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.2" />
   </ItemGroup>
 
   <ItemGroup>

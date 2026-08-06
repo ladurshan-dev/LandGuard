@@ -324,10 +324,180 @@ pass. Please still run `dotnet restore && dotnet build` against a real
 LandGuardDB instance before the next module starts, the same as after
 Module 1.
 
+---
+
+# Module 3 — JWT Authentication and Role-Based Authorization
+
+Module 3 builds the first real feature on top of Modules 1 and 2: Buyer and
+Seller registration, login, "who am I", and change password, plus the JWT
+issuance and role-based policy plumbing every later module (Property,
+Fraud Review, Admin) will authorize against. It follows the
+`INotificationStoredProcedures` pattern from Module 2 exactly —
+`IUserStoredProcedures` / `UserStoredProcedures` — and adds nothing to
+Domain/Application/Infrastructure that Module 2 didn't already establish a
+shape for.
+
+## The one database gap, and how it was resolved
+
+LandGuardDB ships `usp_User_Register` (INSERT), `usp_User_Login` (SELECT,
+includes `PasswordHash`) and `usp_User_GetById` (SELECT, excludes
+`PasswordHash`) — but no procedure to update `Users.PasswordHash` after
+registration, which the Change Password endpoint needs. Per this project's
+"stop and ask before database schema changes" rule, this was raised before
+any code was written. The agreed fix, confirmed by the project owner: add
+one new, narrowly-scoped stored procedure — **not** a table or column
+change.
+
+`database/Module3_ChangePassword.sql` adds `usp_User_ChangePassword`
+(`@UserID`, `@NewPasswordHash` → updates the row, inserts a security
+notification, returns rows-affected), modelled directly on the existing
+`usp_Admin_SetUserActive` for style consistency (existence/active check →
+RAISERROR, TRY/CATCH transaction, final SELECT, `RETURN 0`). It is a
+separate, additive file rather than an edit to Module 2's
+`04_StoredProcedures.sql` — this checkout doesn't contain that canonical
+script — with a header comment noting it should be folded in there next
+time that repository is updated. No table, column, or constraint changed.
+
+## Application layer: contracts before implementation
+
+- `Common/Models/UserProfile.cs` — the safe, password-free shape returned
+  by `usp_User_Register`/`usp_User_GetById` (9 columns) and by every Auth
+  endpoint.
+- `Common/Models/UserCredential.cs` — the one shape that carries
+  `PasswordHash`, matching `usp_User_Login`'s result set exactly. Used only
+  inside `AuthService` to verify a password, then discarded — never
+  returned by a controller or referenced by a DTO.
+- `Common/Models/AccessToken.cs` — `(Token, ExpiresAtUtc)`, what
+  `IJwtTokenGenerator` returns.
+- `Common/Interfaces/IPasswordHasher.cs`, `IJwtTokenGenerator.cs`,
+  `StoredProcedures/IUserStoredProcedures.cs`, `IAuthService.cs` — the four
+  abstractions `AuthService` composes. Each is implemented in
+  Infrastructure and injected by interface only, the same Dependency
+  Inversion pattern as every other Infrastructure concern in this
+  solution.
+- `DTOs/Auth/*` — `BuyerRegisterRequest`, `SellerRegisterRequest`,
+  `LoginRequest`, `ChangePasswordRequest`, `AuthResponse`, each with a
+  FluentValidation validator under `DTOs/Auth/Validators`. Password
+  strength (8+ chars, upper, lower, digit) and the Sri Lankan NIC pattern
+  (`dbo.fn_IsValidNIC`'s exact shape: 9 digits + V/X, or 12 digits) are
+  centralized in `AuthValidationRules` so the two DTOs that need them
+  (`BuyerRegisterRequest` optionally, `SellerRegisterRequest` required)
+  don't duplicate the regex.
+- `Services/AuthService.cs` — orchestrates all five operations. Contains
+  no SQL and no HTTP. `RegisterBuyerAsync`/`RegisterSellerAsync` hash the
+  password, call `usp_User_Register`, and log the caller straight in
+  (returns a token, so the frontend never needs a second round trip after
+  sign-up). `LoginAsync` returns the same generic "Invalid email or
+  password" `Result.Failure` whether the email doesn't exist or the
+  password is wrong — standard practice against account enumeration — and
+  separately checks `IsActive` for a suspended account. `ChangePasswordAsync`
+  re-verifies `CurrentPassword` against the stored hash before calling
+  `usp_User_ChangePassword`.
+
+## Why role claims carry `"Admin"`, not `"Administrator"`
+
+`Users.Role` is `VARCHAR(20)` constrained to the literal strings `Buyer`,
+`Seller`, `Admin` (`CK_Users_Role`). The C# enum keeps the friendlier
+`UserRole.Administrator` (Module 2's own reasoning), so
+`UserRoleExtensions.ToDbValue`/`FromDbValue` (Domain) is the single place
+that translates between them — `UserConfiguration`'s EF Core value
+converter now calls it too, rather than duplicating the mapping inline.
+`JwtTokenGenerator` writes the claim via `role.ToDbValue()`, so the
+`ClaimTypes.Role` claim inside every issued token, and therefore every
+`[Authorize(Roles=...)]`/policy check, is always `"Admin"` — matching what
+`CurrentUserService` and ASP.NET Core's role middleware compare against.
+
+## Infrastructure: hashing, tokens, the fourth stored-procedure wrapper
+
+- `BcryptPasswordHasher` — `BCrypt.Net-Next`, work factor 11, matching the
+  work factor already baked into every seeded password hash (Module 2's
+  `05_SeedData.sql`, every hash is BCrypt of `Test@123`) — freshly
+  registered accounts and seeded test accounts hash the same way, not just
+  verify the same way.
+- `JwtSettings` / `JwtTokenGenerator` — `System.IdentityModel.Tokens.Jwt`,
+  HMAC-SHA256, claims `NameIdentifier`/`Email`/`Name`/`Role`/`jti`. Reads
+  the same `Jwt` configuration section Program.cs already used in Module 1
+  for `TokenValidationParameters`, via `IOptions<JwtSettings>` bound once
+  in `AddInfrastructureServices` — signing and validation can never drift
+  onto two different keys by accident.
+- `UserStoredProcedures` — the fourth `I{Area}StoredProcedures`
+  implementation (after Notifications in Module 2). `RegisterAsync` is the
+  first place this solution needs Dapper's `DynamicParameters` for a real
+  OUTPUT parameter (`usp_User_Register`'s `@NewUserID`) — no change to
+  `IStoredProcedureExecutor`'s `object? parameters` signature was needed,
+  it already accepted anything Dapper can execute.
+
+## API layer
+
+- `Controllers/AuthController.cs` — `POST /api/auth/register/buyer`,
+  `POST /api/auth/register/seller`, `POST /api/auth/login` (all
+  `[AllowAnonymous]`); `GET /api/auth/me`, `POST /api/auth/change-password`
+  (both `[Authorize]`, any authenticated role — the target user always
+  comes from the JWT's `NameIdentifier` claim via `ICurrentUserService`,
+  never from the request body). Every action is a thin `Result` → HTTP
+  translation; all business logic stays in `AuthService`.
+- `Authorization/AuthorizationPolicies.cs` — `RequireBuyer`,
+  `RequireSeller`, `RequireAdmin`, `RequireSellerOrAdmin` named policies
+  (the .NET 8 `AddAuthorizationBuilder()` idiom), registered in
+  `Program.cs`. No controller beyond Auth needs them yet, but Property
+  (Seller-only upload, Admin-only review) and Admin modules will consume
+  them immediately without redefining role strings.
+- `ExceptionHandlingMiddleware` — one new case: `SqlException` → 400 with
+  the driver's message. `usp_User_Register` (duplicate email, invalid/
+  duplicate Seller NIC) and `usp_User_ChangePassword` (inactive account)
+  enforce their rules with `RAISERROR`, which surfaces as a `SqlException`
+  in C# — this is an *expected*, business-rule outcome from the database's
+  point of view, so it gets a clean 400 with the SQL-authored message
+  rather than falling through to the generic 500 case.
+- `Program.cs` — added the four `AddAuthorizationBuilder()` policies above
+  `builder.Build()`. The JWT Bearer *authentication* pipeline itself needed
+  no changes; it was already fully wired in Module 1 in anticipation of
+  this module.
+- Swagger's bearer "Authorize" button (Module 1) now has real endpoints to
+  authorize against — `/api/auth/login` returns a token that can be pasted
+  in directly.
+
+## Config and package changes
+
+- `src/LandGuard.Infrastructure/LandGuard.Infrastructure.csproj` — added
+  `BCrypt.Net-Next` 4.0.3 and `System.IdentityModel.Tokens.Jwt` 8.0.2.
+- `src/LandGuard.Infrastructure/DependencyInjection.cs` — registers
+  `JwtSettings` (via `Configure<JwtSettings>`), `IPasswordHasher`,
+  `IJwtTokenGenerator`, `IUserStoredProcedures`.
+- `src/LandGuard.Application/DependencyInjection.cs` — registers
+  `IAuthService`; the four Auth validators need no explicit line, they're
+  picked up by the existing `AddValidatorsFromAssembly` scan.
+- `appsettings.json` — no changes; the `Jwt` section Module 1 already
+  added is exactly what `JwtSettings` binds to.
+
+## What's still deliberately not here
+
+No refresh tokens, no email verification/password-reset flow, no
+account lockout after repeated failed logins, no `PropertyService`,
+`FraudDetectionService`, or Admin endpoints. Password reset in particular
+needs an email-delivery decision this project hasn't made yet, so it was
+left out rather than half-built.
+
+## Verifying this module
+
+Same sandbox constraint as Modules 1 and 2 — no outbound access to install
+the .NET SDK here, so this was reviewed statically rather than
+`dotnet build`-verified: every DTO's properties match its validator and
+its consuming `AuthService` method; `UserProfile`/`UserCredential`'s
+properties match each stored procedure's actual SELECT list column-for-
+column; `IUserStoredProcedures`/`IPasswordHasher`/`IJwtTokenGenerator` each
+have exactly one Infrastructure implementation, registered once in DI; the
+role string written into JWTs (`ToDbValue`) matches what
+`AuthorizationPolicies` and `CK_Users_Role` both expect (`Admin`, not
+`Administrator`); and no Module 2 file was changed beyond the two
+documented above (`UserConfiguration`'s converter call site, and the two
+DI/csproj files). **Please run `dotnet restore && dotnet build` against a
+real LandGuardDB instance — with `usp_User_ChangePassword` applied via
+`database/Module3_ChangePassword.sql` — before starting the next module.**
+
 ## Next module
 
-Waiting on direction — Authentication, Property Management, or Fraud
-Detection are the logical next steps, each of which will add its own
-`I{Area}StoredProcedures` wrapper following the Notifications pattern
-above, plus the Application-layer service and API controller that this
-module deliberately left out.
+Waiting on direction — Property Management (Seller upload, Buyer browse)
+or Fraud Detection Engine exposure are the logical next steps, each
+authorizing against the policies this module just added
+(`RequireSeller`/`RequireBuyer`/`RequireAdmin`/`RequireSellerOrAdmin`).

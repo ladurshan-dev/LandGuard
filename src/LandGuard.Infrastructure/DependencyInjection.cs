@@ -8,6 +8,7 @@ using LandGuard.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace LandGuard.Infrastructure;
 
@@ -62,6 +63,16 @@ public static class DependencyInjection
         // is built.
         services.AddScoped<IStoredProcedureExecutor, DapperStoredProcedureExecutor>();
         services.AddScoped<INotificationStoredProcedures, NotificationStoredProcedures>();
+
+        // Module 3 (Authentication): JwtSettings binds the "Jwt" config
+        // section once here, shared by JwtTokenGenerator (signing) and
+        // Program.cs's TokenValidationParameters (validation) so the two
+        // never drift apart. IUserStoredProcedures follows the same
+        // per-area wrapper pattern as INotificationStoredProcedures above.
+        services.Configure<JwtSettings>(configuration.GetSection("Jwt"));
+        services.AddScoped<IPasswordHasher, BcryptPasswordHasher>();
+        services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
+        services.AddScoped<IUserStoredProcedures, UserStoredProcedures>();
 
         return services;
     }

@@ -1,5 +1,7 @@
 using System.Reflection;
 using FluentValidation;
+using LandGuard.Application.Common.Interfaces;
+using LandGuard.Application.Services;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace LandGuard.Application;
@@ -13,6 +15,13 @@ namespace LandGuard.Application;
 /// modules add AutoMapper profiles or FluentValidation validators, they
 /// are picked up automatically by the assembly scan below - no change
 /// needed here.
+///
+/// Service Layer classes (AuthService, and whatever PropertyService/
+/// FraudDetectionService/AdminService follow) are registered explicitly
+/// below, one line per service, rather than scanned - unlike validators,
+/// there's no reflection convention for "which interface does this class
+/// implement", and being explicit here is also the one place a reader can
+/// see the full list of business services the API exposes.
 /// </summary>
 public static class DependencyInjection
 {
@@ -22,6 +31,8 @@ public static class DependencyInjection
 
         services.AddAutoMapper(assembly);
         services.AddValidatorsFromAssembly(assembly);
+
+        services.AddScoped<IAuthService, AuthService>();
 
         return services;
     }

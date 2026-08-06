@@ -1,4 +1,5 @@
 using System.Text;
+using LandGuard.API.Authorization;
 using LandGuard.API.Middleware;
 using LandGuard.Application;
 using LandGuard.Infrastructure;
@@ -116,7 +117,22 @@ builder.Services
         };
     });
 
-builder.Services.AddAuthorization();
+// ---------------------------------------------------------------------
+// Role-based authorization policies (Module 3). Named policies (the .NET 8
+// AddAuthorizationBuilder idiom) rather than raw [Authorize(Roles="Admin")]
+// strings, so the three role names live in exactly one place -
+// LandGuard.API.Authorization.AuthorizationPolicies - and controllers
+// reference the policy by name instead of repeating the string.
+// ---------------------------------------------------------------------
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy(AuthorizationPolicies.RequireBuyer, policy =>
+        policy.RequireRole(AuthorizationPolicies.BuyerRole))
+    .AddPolicy(AuthorizationPolicies.RequireSeller, policy =>
+        policy.RequireRole(AuthorizationPolicies.SellerRole))
+    .AddPolicy(AuthorizationPolicies.RequireAdmin, policy =>
+        policy.RequireRole(AuthorizationPolicies.AdminRole))
+    .AddPolicy(AuthorizationPolicies.RequireSellerOrAdmin, policy =>
+        policy.RequireRole(AuthorizationPolicies.SellerRole, AuthorizationPolicies.AdminRole));
 
 var app = builder.Build();
 
