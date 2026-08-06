@@ -37,6 +37,9 @@ public static class DependencyInjection
         // Module 4 (Property Management).
         services.AddScoped<IPropertyService, PropertyService>();
 
+        // Module 5A (Fraud Detection Foundation).
+        services.AddScoped<IFraudDetectionService, FraudDetectionService>();
+
         return services;
     }
 }

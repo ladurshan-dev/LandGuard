@@ -96,6 +96,13 @@ public static class DependencyInjection
         services.Configure<FileStorageSettings>(configuration.GetSection("FileStorage"));
         services.AddScoped<IFileStorageService, LocalFileStorageService>();
 
+        // Module 5A (Fraud Detection Foundation): IFraudStoredProcedures
+        // wraps only the one new procedure this module needed
+        // (usp_Fraud_GetHistory) - analysis and reporting reuse
+        // IPropertyStoredProcedures/IPropertyService, registered above,
+        // rather than a duplicate wrapper here.
+        services.AddScoped<IFraudStoredProcedures, FraudStoredProcedures>();
+
         return services;
     }
 }

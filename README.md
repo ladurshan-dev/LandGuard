@@ -712,3 +712,187 @@ approve/reject, dashboard, user suspension, NIC verification, rule-weight
 tuning) or the Buyer-features module (saved properties, suspicious
 reports, notifications) are the logical next steps per
 `Database/Docs/API_Mapping.md`'s own phasing.
+
+---
+
+# Module 5A — Fraud Detection Foundation
+
+Module 5A's brief, taken literally, asked for a new C# rule engine
+(`IFraudRule`, placeholder rules like `OwnerNameRule`/`SurveyPlanRule`,
+Guid property ids, its own 6-rule/100-point weighting, a 4-tier
+LOW/MEDIUM/HIGH/CRITICAL band) - a document-verification model with no
+relationship to anything in LandGuardDB. Before writing any code, this was
+raised directly: Module 2 already shipped a complete, tested, 7-rule fraud
+engine entirely in T-SQL (`usp_Fraud_AnalyseProperty` /
+`usp_Risk_GenerateReport` / `dbo.FraudCheck` / `dbo.RiskReport` /
+`dbo.FraudRuleWeight`), already wired into Property Create/Update by
+Module 4, using `int` property ids and a 3-tier Low/Medium/High band
+(`CK_RiskReport_Banding`, 0-40/41-70/71-100) - not the spec's numbers.
+Building the spec literally would have meant either a second, redundant
+fraud engine sitting alongside the real one, or gutting Module 2/4's
+already-shipped behaviour to fit a rule set (Owner Name, Survey Plan,
+Land Extent, Registration Number, Parcel Number, Address) that doesn't
+correspond to any column LandGuardDB actually has.
+
+**Confirmed direction:** keep the existing fraud engine exactly as
+implemented; do not create a second fraud subsystem or replace any
+existing table, procedure, or rule model; build only the missing
+Application/Infrastructure/API layers around the current SQL Server
+engine; consume existing calculations instead of duplicating them in C#;
+touch Modules 1-4 only where unavoidable. Concretely, this means:
+
+- **No `IFraudRule`/rule-engine abstraction and no placeholder rules**
+  (`OwnerNameRule`, `SurveyPlanRule`, etc.) - there is nothing for them to
+  plug into. The real rule engine already lives entirely in
+  `usp_Fraud_AnalyseProperty`; a parallel C# one would be exactly the
+  "second fraud subsystem" ruled out above. Re-introducing a
+  document-field-matching engine (Owner Name/Survey Plan/etc. compared
+  against OCR output) is a Module 5B decision, once real OCR data and a
+  land-registry comparison table exist to justify it.
+- **`int propertyId`, not `Guid`** - `dbo.Property.PropertyID` is an
+  `INT IDENTITY` everywhere in the schema; every method in this module
+  uses `int`, consistent with `IPropertyService`/`IAuthService`.
+- **`FraudCheck`/`RiskReport`/`FraudRuleWeight`** were already completed
+  in Module 2 (Domain entities, EF Core configurations, seed data) - per
+  the brief's own "only if they are not already completed," nothing was
+  added here.
+
+## What was actually missing
+
+Reviewing the existing engine (`Database/Scripts/01_Schema.sql`,
+`03_Views.sql`, `04_StoredProcedures.sql`) against the module's three
+required operations - analyze, get the current report, get history -
+showed two of the three already had a wrapper and one didn't:
+
+- **Analyze** - `usp_Fraud_AnalyseProperty` already exists and is already
+  called by `IPropertyStoredProcedures.AnalyseAsync` (Module 4). Nothing
+  new needed at the data-access layer.
+- **Current report** - `usp_Property_GetById`'s third result set
+  (`vw_FraudCheckDetail`) is already wrapped as
+  `PropertyDetail.FraudReport`, reachable via
+  `IPropertyStoredProcedures.GetByIdAsync`/`IPropertyService.GetByIdAsync`.
+  Nothing new needed here either.
+- **History** - `dbo.FraudCheck` keeps one row per analysis run by design
+  ("a property may be analysed more than once ... this table keeps full
+  history"), but no existing view or procedure ever exposed more than the
+  latest run - `vw_PropertyLatestRisk` and everything built on it
+  (`vw_FraudCheckDetail`, `usp_Property_GetById`) are latest-only. This
+  was the one genuine gap.
+
+`database/Module5A_FraudHistory.sql` adds exactly one new, read-only,
+additive procedure - `usp_Fraud_GetHistory(@PropertyID)` - joining
+`FraudCheck` to `RiskReport` for a property, newest first. Same pattern as
+Module 3's `Module3_ChangePassword.sql`: a separate file (this checkout
+has no canonical `Database/Scripts` folder), a header noting it should be
+folded into `04_StoredProcedures.sql` Section D next time that repository
+updates, and nothing else touched.
+
+## Application layer
+
+- `Common/Models/FraudHistoryEntry.cs` - the one new Dapper-projection
+  DTO, matching `usp_Fraud_GetHistory`'s result set exactly.
+- `Common/Interfaces/StoredProcedures/IFraudStoredProcedures.cs` -
+  deliberately one method (`GetHistoryAsync`). Its doc comment explains
+  why Analyze and Report aren't declared here too: they already have
+  wrappers, and re-declaring them would be exactly the duplication this
+  module was told to avoid.
+- `Common/Interfaces/IFraudDetectionService.cs` /
+  `Services/FraudDetectionService.cs` - `AnalyzePropertyAsync`,
+  `CalculateRiskScoreAsync`, `GetFraudReportAsync`,
+  `GetFraudHistoryAsync`. No rule is evaluated and no score is computed
+  anywhere in this class - `CalculateRiskScoreAsync` reads the score
+  `usp_Risk_GenerateReport` already wrote, it doesn't recompute one.
+  Composes `IPropertyStoredProcedures`, `IPropertyService`,
+  `IUserStoredProcedures` (all Module 3/4, unchanged) and the one new
+  `IFraudStoredProcedures`.
+- `DTOs/Fraud/{FraudAnalysisResponse,FraudReportResponse,FraudRuleResponse,RiskSummaryResponse,FraudHistoryResponse}.cs` -
+  every field is a direct projection of an existing column
+  (`PropertyFraudRuleResult`/`PropertyListingResult`, both from Module 4)
+  or the new `FraudHistoryEntry` - never a C#-computed value.
+
+## Two different authorization checks, on purpose
+
+`AnalyzePropertyAsync` and the three read methods enforce ownership
+differently, because "who may trigger analysis" and "who may read a
+report" are genuinely different rules:
+
+- **Analyze** uses a strict check against the *raw* property
+  (`IPropertyStoredProcedures.GetByIdAsync`, no visibility filtering):
+  owning Seller or Admin only. Reusing `IPropertyService.GetByIdAsync`'s
+  visibility rule here would have been a real authorization bug - it
+  would let any Seller trigger re-analysis of any other Seller's already-
+  Approved (therefore publicly visible) listing, since "Approved" alone
+  passes that rule.
+- **Report/History/CalculateRiskScore** reuse
+  `IPropertyService.GetByIdAsync` directly (the exact visibility rule
+  `PropertyController` already exposes: public once Approved, otherwise
+  owner or Admin only) - precisely "Buyer read-only" once a listing is
+  public, and no leak of a Pending/Flagged/Rejected listing's existence
+  to anyone uninvolved with it.
+- **"Property is active"** (the third validation point in the brief) is
+  read as "the owning seller's account hasn't been suspended" -
+  `dbo.Property` has no `IsActive` column of its own; this is exactly the
+  definition `vw_PublishedProperty` and the engine's own NIC check
+  (`usp_Fraud_AnalyseProperty`'s `Users.IsActive`) already use. Checked
+  via the existing `IUserStoredProcedures.GetByIdAsync`, only for Analyze
+  (reading an already-suspended seller's past report is still allowed).
+
+## API layer
+
+- `Controllers/FraudController.cs` - `POST /api/fraud/analyze/{propertyId}`
+  (`[Authorize(Policy = RequireSellerOrAdmin)]` - a Buyer can't reach this
+  route at all), `GET /api/fraud/report/{propertyId}` and
+  `GET /api/fraud/history/{propertyId}` (`[Authorize]`, any authenticated
+  role - ownership/visibility decided inside FraudDetectionService, not
+  here). Every endpoint requires a JWT; there is no anonymous access,
+  unlike `PropertyController`'s public search/GetById - the brief was
+  explicit that all three fraud endpoints require authorization.
+  No new authorization policy was needed - `RequireSellerOrAdmin`
+  (Module 3) already expressed exactly "Seller or Admin."
+
+## Config/DI changes
+
+- `src/LandGuard.Application/DependencyInjection.cs` - registers
+  `IFraudDetectionService`.
+- `src/LandGuard.Infrastructure/DependencyInjection.cs` - registers
+  `IFraudStoredProcedures`.
+- No `appsettings.json` changes, no new NuGet packages, no changes to
+  `Program.cs` - this module adds no new configuration surface or
+  pipeline concern.
+
+## What's still deliberately not here
+
+No OCR, no Tesseract, no PDF reading, no image processing, no AI/vision
+API of any kind - explicitly excluded, Module 5B's job. No document-field
+comparison (Owner Name, Survey Plan, Land Extent, Registration Number,
+Parcel Number, Address) - there is no data source for those fields yet
+(no land-registry dataset table exists in LandGuardDB); this is exactly
+what Module 5B's OCR + Dummy Land Registry Dataset work is expected to
+supply, at which point a real (not placeholder) rule engine can be
+designed against real inputs. No changes to `usp_Fraud_AnalyseProperty`,
+`usp_Risk_GenerateReport`, `dbo.FraudRuleWeight`'s rows, or
+`CK_RiskReport_Banding`.
+
+## Verifying this module
+
+Same sandbox constraint as Modules 1-4 - no outbound access to install the
+.NET SDK here, so this was reviewed statically rather than
+`dotnet build`-verified: `IFraudDetectionService`/`IFraudStoredProcedures`
+method signatures match their implementations exactly;
+`FraudHistoryEntry`'s properties match `usp_Fraud_GetHistory`'s `SELECT`
+list column-for-column; every response DTO field traces to an existing
+`PropertyListingResult`/`PropertyFraudRuleResult` field or the new
+`FraudHistoryEntry`, with no C#-side calculation; no Module 1-4 file was
+changed at all beyond the two `DependencyInjection.cs` registrations
+listed above. **Please run `dotnet restore && dotnet build` against a
+real LandGuardDB instance - with `usp_Fraud_GetHistory` applied via
+`database/Module5A_FraudHistory.sql` - before starting Module 5B.**
+
+## Next module
+
+Module 5B (OCR + document verification against the Dummy Land Registry
+Dataset) is the natural next step now that this module's foundation
+(analyze/report/history, wired through JWT authorization) is in place -
+that is where a real document-matching rule set, fed by actual OCR
+output, would get designed and plugged in, rather than the simulated
+placeholder rules this module deliberately did not build.
