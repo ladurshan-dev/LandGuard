@@ -495,9 +495,220 @@ DI/csproj files). **Please run `dotnet restore && dotnet build` against a
 real LandGuardDB instance — with `usp_User_ChangePassword` applied via
 `database/Module3_ChangePassword.sql` — before starting the next module.**
 
+---
+
+# Module 4 — Property Management
+
+Module 4 builds Property CRUD, image upload, search and the seller/public
+visibility rules around them, on top of the stored-procedure architecture
+Module 2 already built for `dbo.Property`/`dbo.PropertyImage` and the
+8-point fraud engine. Nothing here redesigns a table or a procedure —
+`usp_Property_Create/Update/Delete/GetById/Search/GetBySeller`,
+`usp_PropertyImage_Add` and `usp_Fraud_AnalyseProperty` already existed in
+the uploaded LandGuardDB package and are used exactly as written.
+
+## Scope: PropertyController only, matching `Database/Docs/API_Mapping.md`
+
+The database owner's own API mapping document splits the property
+endpoints into three phases — Phase 1 `PropertyController` (CRUD, search,
+images), Phase 2 the Fraud Detection Engine (already fully implemented in
+T-SQL since Module 2), Phase 3 `AdminController`
+(`/api/admin/flagged`, `/approve/{id}`, `/reject/{id}`, `/dashboard`, ...).
+Module 4 builds exactly Phase 1. `usp_Admin_ApproveProperty` and
+`usp_Admin_RejectProperty` — the only stored procedures that let an Admin
+change a listing's `Status` field itself — are deliberately left for a
+future Admin module, per that same document's own phasing, rather than
+bolted onto PropertyController. Within Phase 1's own scope, "owner or Admin
+can modify/delete" is fully satisfied: `usp_Property_Update` only ever
+lets the owning Seller edit a listing's fields (there is no admin bypass
+in that procedure, so this module doesn't invent one), while
+`usp_Property_Delete` explicitly authorizes the owner **or** an active
+Admin.
+
+## Where authorization actually lives
+
+Two different enforcement points, chosen to match what each stored
+procedure already does:
+
+- **Update and Delete** — the stored procedures are the real
+  authorization boundary. `usp_Property_Update` raises a `RAISERROR` (→
+  `SqlException` → 400, via Module 3's `ExceptionHandlingMiddleware`) if
+  `@SellerID` doesn't own the row; `usp_Property_Delete` does the same
+  unless the caller owns the row or is an active Admin. `PropertyController`
+  never passes a client-supplied owner id — `@SellerID`/`@UserID` always
+  come from `ICurrentUserService.UserId`, the same "target always comes
+  from the JWT, never the body" rule Module 3's Change Password endpoint
+  established — so this can't be bypassed by claiming a different id.
+  `PropertyService` doesn't duplicate this check; it only surfaces
+  whatever the procedure decides.
+- **AddImage and GetBySeller** — `usp_PropertyImage_Add` and
+  `usp_Property_GetBySeller` have no caller awareness at all (the first is
+  a plain insert, the second a plain `SELECT ... WHERE SellerID = @SellerID`
+  with no check that the caller *is* that seller). `PropertyService`
+  enforces "owner or Admin" for both directly, since the database
+  genuinely has no opinion here.
+- **GetById** — `usp_Property_GetById` returns a row regardless of
+  status. `PropertyService` applies the visibility rule: an `Approved`
+  listing is visible to anyone; a `Pending`/`Flagged`/`Rejected` one is
+  visible only to its owner or an Admin. A Buyer probing another id gets
+  the identical "Property not found" `Result.Failure` a nonexistent id
+  would produce — the same account-enumeration-safe shape Module 3's login
+  endpoint uses, so a listing's existence and its moderation status are
+  never distinguishable to someone who shouldn't see either.
+
+## Application layer
+
+- `Common/Models/PropertyListingResult.cs`, `PropertySearchResult.cs`,
+  `PropertyImageSummary.cs`, `PropertyFraudRuleResult.cs`,
+  `PropertyDetail.cs` — dedicated Dapper-projection DTOs, one per distinct
+  stored-procedure result-set shape, following the same reasoning Module 3
+  gave for `UserProfile`/`UserCredential`/`NotificationSummary`: these come
+  from a SQL view via Dapper, not a tracked EF Core query, so they stay
+  decoupled from the EF Core-oriented `PropertyListing`/`PublishedProperty`
+  read models Module 2 built for `IApplicationDbContext`, even though the
+  column lists overlap heavily.
+- `Common/Interfaces/StoredProcedures/IPropertyStoredProcedures.cs` — one
+  method per Property/Image/Fraud-trigger procedure, including
+  `AnalyseAsync` (wraps `usp_Fraud_AnalyseProperty` directly) so
+  `PropertyService` can re-run the engine after images are attached — the
+  submission sequence `Database/Docs/API_Mapping.md` documents
+  (Create → AddImage(s) → Analyse), since `usp_Property_Create`'s own
+  internal analysis run happens *before* any photo exists.
+- `Common/Interfaces/IGeocodingService.cs` / `IFileStorageService.cs` — the
+  two new external-concern seams this module needs, each with exactly one
+  Infrastructure implementation, the same Dependency Inversion pattern as
+  `IPasswordHasher`/`IJwtTokenGenerator` in Module 3.
+- `DTOs/Property/*` — `CreatePropertyRequest`, `UpdatePropertyRequest`
+  (every field optional, matching `usp_Property_Update`'s
+  `ISNULL(@Param, Column)` pattern), `PropertySearchRequest`, each with a
+  FluentValidation validator under `DTOs/Property/Validators`. Field
+  lengths mirror `dbo.Property`'s actual column widths
+  (`PropertyValidationRules`); Latitude/Longitude validation is only a
+  general `[-90,90]`/`[-180,180]` sanity check — coordinates outside Sri
+  Lanka are accepted by validation on purpose, since that's exactly what
+  fraud rule 6 (Location Validation) is supposed to catch, not something
+  a 400 should pre-empt.
+- `Services/PropertyService.cs` — orchestrates all seven operations
+  (Create, AddImage, GetById, Search, GetBySeller, Update, Delete). No SQL,
+  no HTTP. Composes `IPropertyStoredProcedures`, `IGeocodingService`,
+  `IFileStorageService` and the three validators.
+
+## Geocoding: filling in what the fraud engine needs
+
+`dbo.Property.Latitude`/`Longitude` are documented in Module 2's own
+Data Dictionary as "written back from the Nominatim API" — and fraud rule
+6 (Location Validation, inside `usp_Fraud_AnalyseProperty`) fires whenever
+they're missing or fall outside Sri Lanka's bounding box. Module 2
+deliberately left that integration for "the property module" (its own
+words) to build. `IGeocodingService` / `NominatimGeocodingService`
+(Infrastructure) call the public Nominatim (OpenStreetMap) API — a typed
+`HttpClient` via `AddHttpClient`, 5s timeout, the descriptive `User-Agent`
+Nominatim's usage policy requires — and `PropertyService.CreateAsync`
+calls it automatically whenever a seller doesn't supply explicit
+coordinates. A failed or empty geocode is treated as a normal outcome, not
+an error: it's caught and returns `null` coordinates, which correctly lets
+fraud rule 6 flag the listing rather than blocking submission. `Update`
+supports the same behaviour opt-in via `RegeocodeLocation`, for a seller
+who corrects the location text of a `Flagged`/`Rejected` listing without
+knowing new coordinates themselves.
+
+**Before real production traffic:** the public Nominatim instance is
+rate-limited (1 request/second) and the `Geocoding:UserAgent` value in
+`appsettings.json` is a placeholder — replace it with a real contact
+method per Nominatim's usage policy, or point `Geocoding:BaseUrl` at a
+self-hosted/commercial instance.
+
+## Image upload: local disk today, swappable later
+
+`dbo.PropertyImage.ImageURL` is just an `NVARCHAR(500)` — the schema
+doesn't care where the bytes live. `IFileStorageService` /
+`LocalFileStorageService` (Infrastructure) save uploads under
+`wwwroot/uploads/properties/{propertyId}/{guid}.{ext}` (served back out via
+`app.UseStaticFiles()`, added to `Program.cs`) and compute the SHA-256
+fingerprint fraud rule 2 (Duplicate Image) compares, in one streaming pass
+via `CryptoStream` so the upload is never read twice. This is the correct
+choice for this FYP's local SQL Server Express/IIS Express deployment;
+the interface seam means swapping in Azure Blob Storage or S3 later is one
+new Infrastructure class and one DI registration, with zero change to
+`PropertyService` or `PropertyController`.
+
+`PropertyController.AddImage` accepts `multipart/form-data`
+(`[Consumes]`, 6 MB request-size ceiling), and `PropertyService` rejects
+an unsupported content type or an over-5MB file (`PropertyValidationRules`)
+before ever touching the filesystem — deliberately duplicated as
+Application-layer checks (no `IFormFile` dependency) rather than relying
+solely on `LocalFileStorageService`'s own content-type guard, so the same
+validation would apply to any future non-web caller of `PropertyService`.
+
+## API layer
+
+- `Controllers/PropertyController.cs` — `GET /api/properties` (search,
+  anonymous, published listings only — FR10), `GET /api/properties/{id}`
+  (anonymous, visibility rule applied), `GET /api/properties/seller/{id}`
+  (authenticated, owner-or-Admin — FR08 dashboard grid), `POST /api/properties`
+  (Seller only), `POST /api/properties/{id}/images` (owner or Admin),
+  `PUT /api/properties/{id}` (Seller, ownership enforced by the
+  procedure), `DELETE /api/properties/{id}` (owner or Admin, enforced by
+  the procedure). Every action is a thin `Result`/`PropertyDetail`
+  translation to HTTP; all business logic stays in `PropertyService`.
+- `Program.cs` — added `app.UseStaticFiles()` so uploaded photos are
+  servable at the URL `FileStorageSettings.PublicBaseUrl` points to.
+  No new authorization policies were needed — Module 3's `RequireSeller`
+  covers Create/Update, and `RequireSellerOrAdmin` is a policy for a future
+  module rather than these endpoints, whose owner-or-Admin rule is
+  per-resource (a specific `SellerID` match), not per-role, so it can't be
+  expressed as a static `[Authorize(Policy=...)]` the way Module 3's
+  role-only policies could.
+
+## Config changes
+
+- `src/LandGuard.API/appsettings.json` — added `Geocoding` (`BaseUrl`,
+  `UserAgent`, `TimeoutSeconds`) and `FileStorage` (`RootPath`,
+  `PublicBaseUrl`, `MaxFileSizeBytes`, `AllowedContentTypes`) sections.
+- `src/LandGuard.Infrastructure/DependencyInjection.cs` — registers
+  `IPropertyStoredProcedures`; `IGeocodingService` via a typed
+  `AddHttpClient` (pooled-handler lifetime, rather than a plain
+  `AddScoped` opening a raw `HttpClient` per request); `IFileStorageService`
+  and its `FileStorageSettings` binding.
+- No new NuGet packages — `IHttpClientFactory` (`AddHttpClient`),
+  `IWebHostEnvironment`, and `System.Security.Cryptography.SHA256` all
+  ship inside the `Microsoft.AspNetCore.App` shared framework/.NET base
+  class library Infrastructure already references.
+
+## What's still deliberately not here
+
+No Admin review workflow (`/api/admin/flagged`, `/approve/{id}`,
+`/reject/{id}`, `/dashboard`) — Phase 3 of `API_Mapping.md`, its own
+future module. No `usp_PropertyImage_Delete` (the schema has no such
+procedure; adding one wasn't requested and would be a database change,
+which this module was told to avoid unless absolutely necessary — a
+seller can only add photos, not remove one, until that procedure exists).
+No `SuspiciousReport`/`SavedProperty`/`Notification`-consuming endpoints —
+each belongs to the Buyer-features module the API mapping groups
+separately.
+
+## Verifying this module
+
+Same sandbox constraint as Modules 1-3 — no outbound access to install the
+.NET SDK here, so this was reviewed statically rather than
+`dotnet build`-verified: every `IPropertyStoredProcedures`/`IPropertyService`
+method signature matches its implementation exactly; every Dapper
+projection DTO's property names match the stored procedure's actual
+`SELECT` list (verified column-by-column against
+`Database/Scripts/03_Views.sql` and `04_StoredProcedures.sql`); no
+Module 1/2/3 file was changed beyond `Program.cs` (`UseStaticFiles` +
+policy comment), `appsettings.json` (new config sections), and
+`Infrastructure/DependencyInjection.cs` (new registrations) — Module 2's
+`Property`/`PropertyImage` entities, configurations, and Module 3's Auth
+files are untouched. **Please run `dotnet restore && dotnet build` against
+a real LandGuardDB instance before starting the next module**, and confirm
+`Nominatim` outbound access (or configure an alternative `Geocoding:BaseUrl`)
+in whatever environment this deploys to.
+
 ## Next module
 
-Waiting on direction — Property Management (Seller upload, Buyer browse)
-or Fraud Detection Engine exposure are the logical next steps, each
-authorizing against the policies this module just added
-(`RequireSeller`/`RequireBuyer`/`RequireAdmin`/`RequireSellerOrAdmin`).
+Waiting on direction — the Admin review workflow (flagged queue,
+approve/reject, dashboard, user suspension, NIC verification, rule-weight
+tuning) or the Buyer-features module (saved properties, suspicious
+reports, notifications) are the logical next steps per
+`Database/Docs/API_Mapping.md`'s own phasing.

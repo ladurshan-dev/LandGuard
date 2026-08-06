@@ -153,6 +153,15 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
+// Module 4 (Property Management): serves the property photos
+// LocalFileStorageService writes under wwwroot/uploads/properties at the
+// URL prefix FileStorageSettings.PublicBaseUrl points to
+// (dbo.PropertyImage.ImageURL values are relative paths under that
+// prefix). Placed before UseAuthentication/UseAuthorization - listing
+// photos are public once a property is Approved, the same as the images
+// on any property portal, so they are not gated behind a JWT.
+app.UseStaticFiles();
+
 app.UseCors("LandGuardClient");
 
 app.UseAuthentication();

@@ -74,6 +74,28 @@ public static class DependencyInjection
         services.AddScoped<IJwtTokenGenerator, JwtTokenGenerator>();
         services.AddScoped<IUserStoredProcedures, UserStoredProcedures>();
 
+        // Module 4 (Property Management): IPropertyStoredProcedures follows
+        // the same per-area wrapper pattern as Notifications/Users above.
+        // IGeocodingService is registered as a typed HttpClient
+        // (AddHttpClient<TInterface, TImplementation>) rather than a plain
+        // AddScoped so it gets IHttpClientFactory's pooled-handler lifetime
+        // management for free instead of this class opening a raw
+        // HttpClient per request. IFileStorageService/FileStorageSettings
+        // are the swappable-storage seam documented on FileStorageSettings.
+        services.AddScoped<IPropertyStoredProcedures, PropertyStoredProcedures>();
+
+        services.Configure<GeocodingSettings>(configuration.GetSection("Geocoding"));
+        services.AddHttpClient<IGeocodingService, NominatimGeocodingService>((serviceProvider, client) =>
+        {
+            var settings = serviceProvider.GetRequiredService<IOptions<GeocodingSettings>>().Value;
+            client.BaseAddress = new Uri(settings.BaseUrl.TrimEnd('/') + "/");
+            client.Timeout = TimeSpan.FromSeconds(settings.TimeoutSeconds);
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(settings.UserAgent);
+        });
+
+        services.Configure<FileStorageSettings>(configuration.GetSection("FileStorage"));
+        services.AddScoped<IFileStorageService, LocalFileStorageService>();
+
         return services;
     }
 }

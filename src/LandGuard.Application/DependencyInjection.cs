@@ -34,6 +34,9 @@ public static class DependencyInjection
 
         services.AddScoped<IAuthService, AuthService>();
 
+        // Module 4 (Property Management).
+        services.AddScoped<IPropertyService, PropertyService>();
+
         return services;
     }
 }
