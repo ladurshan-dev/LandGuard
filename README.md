@@ -1114,3 +1114,218 @@ engine (Price/Duplicate/NIC/Deed/SellerHistory/Location/MissingInfo) and
 this module's `ExtractedField` output (Owner Name/NIC/Address/Parcel/
 Registration/Survey Plan/Extent/District/Province/Date) as two distinct,
 complementary inputs to whatever comparison logic it designs.
+
+# Module 5C — OCR-Based Fraud Comparison
+
+Compares the `ExtractedField` data Module 5B already produced against a
+property's LandGuardDB records and persists the result, without running
+OCR again and without touching the existing fraud engine.
+
+## The persistence question, and how it was resolved
+
+Module 5B deliberately stores nothing in LandGuardDB - `POST
+/api/ocr/extract` returns extracted fields straight to the caller. This
+module's brief asks for a `POST /api/fraud/compare/{propertyId}` that
+"consumes the OCR results already produced" (implying the caller supplies
+them) and also a `GET /api/fraud/comparison/{propertyId}` with no request
+body (implying something was stored by the POST for the GET to read back).
+Asked how to reconcile this, the answer was: add one new, narrow, durable
+table rather than an in-memory cache. `database/Module5C_DocumentComparison.sql`
+is therefore the first script in this project that adds new TABLEs - every
+prior additive script (`Module3_ChangePassword.sql`,
+`Module5A_FraudHistory.sql`) only added a stored procedure over tables
+that already existed.
+
+Two new tables, a parent/child pair rather than one very wide row:
+
+- `dbo.DocumentComparison` - one row per comparison run: `PropertyID`,
+  `ComparedByUserID`, `DocumentReference`, `FieldsCompared`,
+  `FieldsMatched`, `OverallMatchPercentage`, `Summary`, `ComparisonDate`.
+- `dbo.DocumentComparisonField` - one row per compared field within a run:
+  `FieldName`, `OcrValue`, `DatabaseValue`, `Matched`,
+  `SimilarityPercentage`, `Message`.
+
+10 compared fields × 5 attributes each on a single header row would mean
+50+ columns and no way to add/remove a compared field later without a
+schema change - a child table follows the same shape this schema already
+uses for Property/PropertyImage. `dbo.DocumentComparisonFieldType` (a
+table type) lets `usp_DocumentComparison_Save` accept every field row as
+one table-valued parameter instead of N separate `INSERT`s.
+`usp_DocumentComparison_GetLatest` reads back only the most recent run
+(matching the endpoint's singular name); every run is still kept, not
+overwritten, so a future comparison-history endpoint needs no further
+schema change.
+
+## Field-to-database mapping, and where the schema genuinely can't compare
+
+Of the 10 fields Module 5B extracts, LandGuardDB has an honest database
+counterpart for 7 of them:
+
+| OCR field | Compared against | Style |
+|---|---|---|
+| OwnerName | the seller's `Users.Name` | text similarity |
+| NIC | the seller's `Users.NIC` | exact |
+| PropertyAddress | `Property.Location` | text similarity |
+| RegistrationNumber | `Property.DeedReference` | exact |
+| LandExtent | `Property.Size` (perches) | numeric, ±5% tolerance |
+| District | `Property.District` | exact |
+| Province | derived from `Property.District` via a fixed Sri Lanka district→province table | exact |
+
+The remaining 3 have no reasonable counterpart under "no database
+redesign," and are reported honestly as not-compared (`DatabaseValue =
+null`, a explanatory `Message`) rather than compared against the wrong
+data:
+
+- **ParcelNumber** and **SurveyPlanNumber** - LandGuardDB's `Property`
+  table has no dedicated column for either; `DeedReference` is the only
+  deed-identifier-like field it has, and that's already used for
+  RegistrationNumber.
+- **Date** (the deed's registration date) - `Property.UploadDate` measures
+  something different (when the listing was submitted to LandGuard, not
+  when the deed was registered). Comparing OCR's registration date against
+  UploadDate would flag a mismatch on almost every real listing (a deed
+  registered years ago, listed today, is normal) - actively misleading,
+  not just unavailable, so it is deliberately not compared rather than
+  silently produce false fraud signal.
+
+Province is the one derived field: LandGuardDB has no `Province` column,
+but Sri Lanka's 25 districts map onto exactly 9 provinces by fixed,
+standard public geography (not fraud-engine data, not invented) -
+`DocumentComparisonService.DistrictToProvince` hardcodes that mapping so
+Province can still be genuinely compared instead of joining the
+"not available" list.
+
+## Comparison logic (`FieldComparer`)
+
+Pure, stateless, dependency-free static class - no AI/ML, no external
+service, matching `DocumentFieldExtractor`'s precedent from Module 5B.
+Every value is normalized first (trim, collapse internal whitespace,
+uppercase), satisfying "case-insensitive comparison, whitespace
+normalization." Three comparison styles:
+
+- **`CompareExact`** (NIC, District, Province, RegistrationNumber) -
+  `Matched` is strict equality after normalization ("exact comparison
+  where appropriate"); `SimilarityPercentage` still reports a graded score
+  even on a mismatch, via the same Levenshtein-based similarity `CompareText`
+  uses, so a near-miss is visible rather than a flat 0%.
+- **`CompareText`** (OwnerName, PropertyAddress) - a simple
+  Levenshtein-distance-based similarity percentage; `Matched` is a ≥80%
+  threshold rather than exact equality, since OCR noise and minor spelling
+  differences shouldn't automatically read as fraud. Explicitly the
+  "simple similarity algorithm... that can later be improved" the brief
+  calls for.
+- **`CompareNumeric`** (LandExtent) - extracts the leading number from the
+  OCR text and compares it to `Property.Size` within a 5% tolerance
+  (perches formatting varies; exact string equality would be meaningless
+  here).
+- **`NotAvailable`** (ParcelNumber, SurveyPlanNumber, Date) - see above.
+
+## Application layer
+
+`IDocumentComparisonService`/`DocumentComparisonService` composes
+`IPropertyStoredProcedures` (raw property, for the strict ownership check
+- the same reasoning `FraudDetectionService.AnalyzePropertyAsync` uses),
+`IPropertyService` (the Approved-or-owner/Admin visibility rule for
+reads), `IUserStoredProcedures` (the seller's Name/NIC/IsActive),
+`IFraudDetectionService` (read-only - see below) and the new
+`IDocumentComparisonStoredProcedures`. `CompareDocumentAsync` validates
+the property exists, the caller owns it or is an Admin, and the owning
+seller is active - the exact same three checks and the exact same order
+`FraudDetectionService.AnalyzePropertyAsync` uses. `GetLatestComparisonAsync`
+uses `IPropertyService.GetByIdAsync`'s visibility rule instead, matching
+`GetFraudReportAsync` - a Buyer's read-only access.
+
+New DTOs: `DocumentComparisonRequest` (the POST body - deliberately reuses
+Module 5B's own `ExtractedField` as its `Fields` list rather than a
+near-duplicate type, so a caller can pass a prior `POST /api/ocr/extract`
+response straight through), `FieldComparisonResponse` (one field's
+outcome), `ComparisonResultResponse` (one comparison run: the header plus
+its fields), `DocumentComparisonResponse` (the top-level response both
+endpoints return: property/document context, the `ComparisonResultResponse`,
+and the current fraud risk).
+
+## Integrating with the existing Fraud Detection Foundation, without duplicating it
+
+This module does not modify `usp_Fraud_AnalyseProperty` or
+`usp_Risk_GenerateReport`, does not write to `dbo.FraudCheck`/
+`dbo.RiskReport`, and does not build a second scoring engine - a document
+comparison's match percentage carries no weight in the existing risk
+score. `IDocumentComparisonService` is a new service (composing
+`IFraudDetectionService`, not a new method bolted onto it) for the same
+reason Module 5A itself composed `IPropertyService` rather than editing
+it: it reuses the existing engine's *read* path
+(`CalculateRiskScoreAsync`) to attach the property's current fraud risk to
+every comparison response, so a caller sees one coherent picture, without
+this module touching a completed Module 5A file.
+
+`DocumentComparisonController` is a **separate controller** from
+`FraudController` for the same "don't touch a completed file" reason, but
+shares its exact `api/fraud` route prefix - `compare`/`comparison` never
+collide with `analyze`/`report`/`history`, which ASP.NET Core routing
+allows across two controllers under one prefix.
+
+## API layer
+
+- `POST /api/fraud/compare/{propertyId}` - Seller (own properties only) or
+  Admin (`RequireSellerOrAdmin`). Body: `DocumentComparisonRequest`.
+- `GET /api/fraud/comparison/{propertyId}` - any authenticated role
+  (`[Authorize]`); Buyer read-only, gated by `IPropertyService`'s
+  visibility rule.
+
+## Config/DI changes
+
+- `Application/DependencyInjection.cs`: `IDocumentComparisonService` ->
+  `DocumentComparisonService`. `FieldComparer` is a static helper, no
+  registration needed, same as `DocumentFieldExtractor`.
+- `Infrastructure/DependencyInjection.cs`:
+  `IDocumentComparisonStoredProcedures` -> `DocumentComparisonStoredProcedures`.
+- No `appsettings.json` changes - nothing in this module is configurable.
+
+## What's still deliberately not here
+
+- **No comparison-history endpoint.** `dbo.DocumentComparison` keeps every
+  run (nothing is deleted or overwritten), so "every past comparison for a
+  property" is one more read-only procedure away, mirroring
+  `usp_Fraud_GetHistory` - not built now since the brief only asked for
+  the latest.
+- **No re-scoring of the existing fraud engine from comparison results.**
+  Deliberately out of scope per "no duplicate fraud engine" - see above.
+- **Province/RegistrationNumber comparisons are best-effort, not
+  authoritative.** The district→province table and the
+  DeedReference-as-registration-number mapping are reasonable stand-ins
+  for missing schema fields, not verified against Sri Lanka's actual Land
+  Registry - flagged here rather than presented as more authoritative than
+  they are.
+
+## Verifying this module
+
+Same sandbox constraint as every prior module - no outbound access to
+install the .NET SDK here, so this was reviewed statically, not `dotnet
+build`-verified. Every new type's namespace/using was checked against the
+files it's called from (`DocumentComparisonService` against
+`IPropertyStoredProcedures`/`IPropertyService`/`IUserStoredProcedures`/
+`IFraudDetectionService`'s actual signatures, read directly before writing
+this module - not assumed from memory).
+
+The table-valued parameter was, in fact, the one part of this module that
+did not compile on first pass: Dapper's `AsTableValuedParameter` only
+accepts a `DataTable` (or `IEnumerable<SqlDataRecord>`) - it has no
+reflection-based mapper that lets a plain `IEnumerable<T>` of a POCO
+(`DocumentComparisonFieldRow`) be passed directly, unlike Dapper's normal
+result-set mapping. `DocumentComparisonStoredProcedures.BuildFieldsTable`
+now converts the field-row list into a `DataTable` first (columns matching
+`dbo.DocumentComparisonFieldType` by name, order and type - SQL Server
+maps a TVP by ordinal position, so the order is load-bearing), and
+`AsTableValuedParameter` is called on that `DataTable` instead. The
+output-parameter pattern itself remains the one already proven in this
+codebase (`UserStoredProcedures.RegisterAsync`,
+`PropertyStoredProcedures.CreateAsync`). **Please
+run `dotnet restore && dotnet build`, apply
+`database/Module5C_DocumentComparison.sql` against LandGuardDB, and
+smoke-test `POST /api/fraud/compare/{propertyId}` with a real
+`POST /api/ocr/extract` response as the body, then `GET
+/api/fraud/comparison/{propertyId}`,** before relying on this module.
+
+## Next module
+
+Nothing further was requested - stopping here per this module's brief.

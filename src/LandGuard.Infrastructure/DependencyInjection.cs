@@ -111,6 +111,12 @@ public static class DependencyInjection
         services.Configure<OcrSettings>(configuration.GetSection("Ocr"));
         services.AddScoped<IOcrService, TesseractOcrService>();
 
+        // Module 5C (OCR-Based Fraud Comparison): IDocumentComparisonStoredProcedures
+        // follows the same per-area wrapper pattern as Notifications/Users/
+        // Property/Fraud above - the two new procedures added by
+        // database/Module5C_DocumentComparison.sql.
+        services.AddScoped<IDocumentComparisonStoredProcedures, DocumentComparisonStoredProcedures>();
+
         return services;
     }
 }

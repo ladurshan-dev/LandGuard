@@ -77,7 +77,7 @@ public class AuthService : IAuthService
         await _loginValidator.ValidateAndThrowAsync(request, cancellationToken);
 
         var credential = await _userStoredProcedures.FindByEmailAsync(request.Email, cancellationToken);
-
+   
         // Same generic message whether the email doesn't exist or the
         // password is wrong - never confirm to a caller whether an email
         // is registered (standard practice against account enumeration).

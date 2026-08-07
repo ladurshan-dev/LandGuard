@@ -45,6 +45,11 @@ public static class DependencyInjection
         // needed for it.
         services.AddScoped<IOcrDocumentService, OcrDocumentService>();
 
+        // Module 5C (OCR-Based Fraud Comparison). FieldComparer is a static
+        // helper, same reasoning as DocumentFieldExtractor above - no DI
+        // registration needed for it.
+        services.AddScoped<IDocumentComparisonService, DocumentComparisonService>();
+
         return services;
     }
 }
