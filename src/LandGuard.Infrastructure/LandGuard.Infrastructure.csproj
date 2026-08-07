@@ -49,6 +49,20 @@
     -->
     <PackageReference Include="BCrypt.Net-Next" Version="4.0.3" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.2" />
+
+    <!--
+      Module 5B (OCR Integration): Tesseract is a .NET wrapper around the
+      native Tesseract/Leptonica OCR engine, run entirely locally (no
+      cloud OCR/vision API, per this module's explicit requirement) - it
+      bundles win-x64/win-x86 native binaries, matching this project's
+      Windows/SQL Server Express deployment target. PDFtoImage (a PDFium
+      wrapper) + SkiaSharp rasterize each PDF page into a PNG before
+      handing it to Tesseract, since Leptonica reads JPEG/PNG/TIFF
+      directly but not PDF - see TesseractOcrService.
+    -->
+    <PackageReference Include="Tesseract" Version="5.2.0" />
+    <PackageReference Include="PDFtoImage" Version="4.1.0" />
+    <PackageReference Include="SkiaSharp" Version="2.88.8" />
   </ItemGroup>
 
   <ItemGroup>

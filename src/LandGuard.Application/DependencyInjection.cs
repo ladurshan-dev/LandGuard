@@ -40,6 +40,11 @@ public static class DependencyInjection
         // Module 5A (Fraud Detection Foundation).
         services.AddScoped<IFraudDetectionService, FraudDetectionService>();
 
+        // Module 5B (OCR Integration). DocumentFieldExtractor is a static
+        // helper (no external dependency, no state) - no DI registration
+        // needed for it.
+        services.AddScoped<IOcrDocumentService, OcrDocumentService>();
+
         return services;
     }
 }

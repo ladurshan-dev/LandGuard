@@ -896,3 +896,221 @@ Dataset) is the natural next step now that this module's foundation
 that is where a real document-matching rule set, fed by actual OCR
 output, would get designed and plugged in, rather than the simulated
 placeholder rules this module deliberately did not build.
+
+---
+
+# Module 5B — OCR Integration
+
+Module 5B extracts raw text (and a first-pass set of placeholder fields)
+from an uploaded land deed PDF or scan, entirely locally via Tesseract OCR.
+It does not score, compare, or persist anything to LandGuardDB - per the
+brief, that is Module 5C's job, once the shape of a real document-matching
+rule set (fed by this module's output) can be designed against actual
+deed samples instead of guessed.
+
+## OCR architecture
+
+- **`IOcrService` (Application) / `TesseractOcrService` (Infrastructure)** -
+  the only piece of this module that talks to a native library. Wraps the
+  `Tesseract` NuGet package (a .NET binding over the native
+  Tesseract/Leptonica OCR engine), run 100% locally - no cloud OCR, no
+  Azure/Google Vision, no OpenAI, per the brief's explicit exclusion list.
+  A PDF is rasterized page-by-page first (`PDFtoImage` + `SkiaSharp`,
+  PNG-encoded) since Leptonica reads JPEG/PNG/TIFF directly but not PDF;
+  JPG/JPEG/PNG/TIFF uploads skip that step entirely. `TesseractEngine`
+  isn't safe to reuse across concurrent calls and its `Process()` call is
+  synchronous native code with no async overload, so a fresh engine is
+  constructed per request and the whole OCR pass runs inside `Task.Run`
+  so it never blocks a request thread for however long OCR takes.
+- **`DocumentFieldExtractor` (Application, static, no DI)** - the
+  placeholder field parsing the brief calls for ("simple regex or
+  placeholder parsing is sufficient"). Most of the 10 fields (Owner Name,
+  Property Address, Parcel Number, Registration Number, Survey Plan
+  Number, Land Extent, District, Province) are matched by scanning for a
+  label ("Owner:", "District:", ...) and taking the rest of that line -
+  deed layouts vary too much for anything more precise without real
+  samples. NIC and Date are matched directly against a recognizable
+  self-contained format instead of a label; the NIC pattern mirrors
+  `AuthValidationRules.NicPattern`'s shape (Module 3) but unanchored, since
+  it's scanning free-form OCR text rather than validating a whole input.
+  Always returns exactly 10 fields, `Found = false` for whichever weren't
+  matched - no AI, no trained model, no fraud comparison, exactly as
+  scoped.
+- **`IOcrDocumentService` (Application) / `OcrDocumentService`** - the
+  orchestrator `OcrController` actually depends on. Validates the upload
+  (type/size), saves the original via the extended `IFileStorageService`,
+  runs OCR, runs field extraction, and assembles the response. No SQL, no
+  HTTP, no fraud logic.
+
+## Reusing, not duplicating, Module 4's file storage
+
+The brief was explicit: reuse the existing local file storage service, do
+not create a second one. `IFileStorageService.SaveImageAsync` (Module 4)
+has a hard-coded `image/jpeg|png|webp` allow-list and is scoped by
+`propertyId` - calling it with a PDF, or before any property exists,
+would simply throw. Rather than duplicating a whole second storage
+service, `IFileStorageService` gained one new, purely additive method:
+
+```csharp
+Task<StoredDocumentFile> SaveDocumentAsync(
+    int uploadedByUserId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default);
+```
+
+`SaveImageAsync`'s signature, behavior, and every existing caller
+(`PropertyService`) are completely unchanged - `LocalFileStorageService`
+was refactored internally (a private `WriteFileAndHashAsync` helper now
+shared by both methods) but its public contract didn't move. This is the
+one modification to a completed module (Module 4) this module made, and
+it was made because the brief's "reuse, don't duplicate" instruction left
+no other option once a PDF/TIFF upload needed handling.
+
+**One deliberate design decision beyond what was asked:** unlike property
+photos (public marketing material, served by `app.UseStaticFiles()` with
+no auth), a land deed can contain personal identity information - an NIC
+number, a home address. Storing deed uploads under `wwwroot` the same way
+would make them reachable by anyone with the URL, forever, with no access
+check. So documents are saved under a new `FileStorageSettings.DocumentsRootPath`
+(`App_Data/uploads/documents` by default) - **outside** `wwwroot`,
+therefore not reachable through the static-file pipeline at all - and
+`OcrResultResponse.DocumentReference` is a storage key
+(`documents/{userId}/{guid}.{ext}`), not a working public URL. There is no
+authenticated retrieval endpoint for these yet; that's a reasonable
+follow-up for whichever module needs to let a Seller/Admin re-download
+what they uploaded; scope-creeping one into this module wasn't justified
+by anything the brief actually asked for.
+
+## DTOs
+
+`DTOs/Ocr/DocumentTextResponse.cs` (raw text, page count, confidence),
+`ExtractedField.cs` (one placeholder field), `OcrResultResponse.cs` (the
+full endpoint response: file name, document reference, `DocumentTextResponse`,
+and the 10 `ExtractedField`s) - the four DTOs the brief named.
+`OcrUploadRequest` (the fifth, form-binding one) lives in
+`LandGuard.API/Models`, not `Application/DTOs`, deliberately: it holds an
+`IFormFile`, an ASP.NET Core HTTP type Application code must never
+reference (the same rule that kept `ICurrentUserService` off `HttpContext`
+directly), and it follows exactly the single-bound-model shape
+`UploadPropertyImageRequest` established in Module 4 to keep Swashbuckle
+happy (see below).
+
+## Swagger
+
+`OcrController.Extract` binds one `[FromForm] OcrUploadRequest request`
+model - not a bare `[FromForm] IFormFile`, and not an `IFormFile` mixed
+with other independent `[FromForm]` scalar parameters. The latter is
+exactly what broke Swashbuckle's `SwaggerGen` on `PropertyController.AddImage`
+in Module 4 (`SwaggerGeneratorException`: "[FromForm] attribute used with
+IFormFile"); this module reuses that fix's shape from the start rather
+than re-discovering the same failure.
+
+## API layer
+
+- `Controllers/OcrController.cs` - `POST /api/ocr/extract`
+  (`[Authorize(Policy = AuthorizationPolicies.RequireSellerOrAdmin)]` - a
+  Buyer can't reach this route at all, matching "only Seller, Admin can
+  upload documents"). No new authorization policy was needed -
+  `RequireSellerOrAdmin` (Module 3) already expressed exactly this.
+- Validates file exists (empty-upload check), file type (the 4 allowed
+  content types), and maximum upload size, all inside `OcrDocumentService`
+  - the same "checked in the service, not a FluentValidation validator"
+  pattern `PropertyService.AddImageAsync` established for image uploads,
+  since there's no multi-field DTO here either.
+
+## Config/DI changes
+
+- `src/LandGuard.Infrastructure/LandGuard.Infrastructure.csproj` - added
+  `Tesseract` 5.2.0, `PDFtoImage` 4.1.0, `SkiaSharp` 2.88.8.
+- `src/LandGuard.Application/DependencyInjection.cs` - registers
+  `IOcrDocumentService`. `DocumentFieldExtractor` is a stateless static
+  helper with no external dependency, so it needs no DI registration.
+- `src/LandGuard.Infrastructure/DependencyInjection.cs` - registers
+  `OcrSettings` (bound from a new `"Ocr"` config section) and
+  `IOcrService`.
+- `src/LandGuard.API/appsettings.json` - new `Ocr` section
+  (`TessDataPath`, `Language`); `FileStorage` gained
+  `DocumentsRootPath`/`MaxDocumentSizeBytes`/`AllowedDocumentContentTypes`
+  alongside its existing (untouched) image-upload settings.
+- No database changes of any kind - none were required.
+
+## Environment setup this module needs (can't be done inside this sandbox)
+
+Two things have to exist on whatever machine actually runs this API,
+neither of which ships with the NuGet packages added above:
+
+1. **Tesseract's trained-data files** (e.g. `eng.traineddata`) under
+   `OcrSettings.TessDataPath` (`tessdata/` by default, relative to the API
+   project) - the `Tesseract` package supplies the engine binaries, not
+   the language data. Download the file(s) matching `Ocr:Language` from
+   the official `tessdata`/`tessdata_fast` repository before running OCR.
+2. **Native Tesseract/Leptonica binaries** - bundled automatically for
+   win-x64/win-x86 by the `Tesseract` NuGet package (this project's actual
+   deployment target, per its SQL Server Express/IIS Express setup); a
+   Linux/Mac host needs `libtesseract`/`libleptonica` installed via its
+   own package manager instead.
+
+## How Module 5C is expected to consume OCR results
+
+`OcrResultResponse` - raw text, per-page confidence, the 10 placeholder
+`ExtractedField` values, and the saved document's `DocumentReference` - is
+the complete output of this module, returned directly to whatever called
+`POST /api/ocr/extract`. Nothing is persisted to LandGuardDB, by design
+(no database changes were made, and none were required for pure
+extraction). Two integration shapes are equally possible for Module 5C,
+and deliberately left as its decision rather than guessed here:
+
+- **Client-orchestrated**: a frontend/API consumer calls
+  `/api/ocr/extract` first, then passes the returned `ExtractedField`
+  values straight into a new Module 5C endpoint (e.g.
+  `POST /api/fraud/compare/{propertyId}`) that performs the actual
+  document-vs-listing comparison Module 5A's rule set doesn't cover.
+- **Server-orchestrated**: Module 5C adds its own service that calls
+  `IOcrDocumentService.ExtractAsync` directly (already registered in DI,
+  already returns plain DTOs - no HTTP round trip needed internally), then
+  persists the extracted fields against a property via a new,
+  purpose-built stored procedure at that point - LandGuardDB has no table
+  for "extracted document fields" today, and Module 5B was told not to
+  add database changes unless required, so none were guessed at here.
+
+Either way, `ExtractedField.FieldName` values (`"OwnerName"`, `"NIC"`,
+`"PropertyAddress"`, `"ParcelNumber"`, `"RegistrationNumber"`,
+`"SurveyPlanNumber"`, `"LandExtent"`, `"District"`, `"Province"`, `"Date"`)
+are stable identifiers Module 5C can key its comparison logic off directly.
+
+## What's still deliberately not here
+
+No fraud scoring, no fraud comparison, no risk calculation, no AI/machine
+learning of any kind, no external OCR API - all explicitly excluded, all
+Module 5C's job (or, for the field-matching engine specifically, exactly
+the "second fraud subsystem" Module 5A's own clarification already ruled
+out building prematurely - the same reasoning applies here until real
+extracted data exists to design against).
+
+## Verifying this module
+
+Same sandbox constraint as every prior module - no outbound access to
+install the .NET SDK or download NuGet packages/tessdata here, so this
+was reviewed statically, not `dotnet build`-verified. The Tesseract/`Pix`/
+`Page` API surface used in `TesseractOcrService` (engine construction,
+`Process`, `GetText`, `GetMeanConfidence`) has been stable for years and
+is used with high confidence; the exact `PDFtoImage.Conversion.ToImages`
+call shape is the one integration point most worth a real smoke test
+first, since its API could differ slightly across package versions with
+no way to confirm the exact signature without network access. Every other
+signature (`IOcrService`, `IOcrDocumentService`, `IFileStorageService`'s
+new method) matches its implementation exactly, and no Module 1-5A file
+changed beyond `IFileStorageService`/`FileStorageSettings`/
+`LocalFileStorageService` (Module 4, additively) and the two
+`DependencyInjection.cs` files. **Please run `dotnet restore && dotnet build`**
+on a machine with the .NET 8 SDK and internet access, **verify the
+Tesseract/PDFtoImage package versions resolve cleanly, place a real
+`eng.traineddata` under `tessdata/`, and smoke-test `/api/ocr/extract`
+with a real PDF and a real image** before relying on this module.
+
+## Next module
+
+Module 5C (fraud comparison against OCR-extracted document fields) is the
+natural next step - it can now consume both Module 5A's existing 7-rule
+engine (Price/Duplicate/NIC/Deed/SellerHistory/Location/MissingInfo) and
+this module's `ExtractedField` output (Owner Name/NIC/Address/Parcel/
+Registration/Survey Plan/Extent/District/Province/Date) as two distinct,
+complementary inputs to whatever comparison logic it designs.

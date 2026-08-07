@@ -32,20 +32,60 @@ public class LocalFileStorageService : IFileStorageService
             ? _settings.RootPath
             : Path.Combine(_environment.ContentRootPath, _settings.RootPath);
 
-        var propertyFolder = Path.Combine(rootPath, propertyId.ToString());
-        Directory.CreateDirectory(propertyFolder);
+        var (storedFileName, hash) = await WriteFileAndHashAsync(
+            rootPath, propertyId.ToString(), fileName, content, cancellationToken);
 
-        // A generated name, not the caller-supplied one - never trust a
-        // client-provided filename for a path segment. The original
-        // extension is kept only for a friendlier file listing.
+        var url = $"{_settings.PublicBaseUrl.TrimEnd('/')}/{propertyId}/{storedFileName}";
+
+        return new StoredImageFile(url, hash);
+    }
+
+    public async Task<StoredDocumentFile> SaveDocumentAsync(
+        int uploadedByUserId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default)
+    {
+        if (!_settings.AllowedDocumentContentTypes.Contains(contentType, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Unsupported document type '{contentType}'. Allowed: {string.Join(", ", _settings.AllowedDocumentContentTypes)}.",
+                nameof(contentType));
+        }
+
+        // Deliberately resolved against DocumentsRootPath, not RootPath -
+        // outside wwwroot, so nothing here is reachable via
+        // app.UseStaticFiles() (see FileStorageSettings.DocumentsRootPath's
+        // doc comment).
+        var rootPath = Path.IsPathRooted(_settings.DocumentsRootPath)
+            ? _settings.DocumentsRootPath
+            : Path.Combine(_environment.ContentRootPath, _settings.DocumentsRootPath);
+
+        var (storedFileName, hash) = await WriteFileAndHashAsync(
+            rootPath, uploadedByUserId.ToString(), fileName, content, cancellationToken);
+
+        var storageReference = $"documents/{uploadedByUserId}/{storedFileName}";
+
+        return new StoredDocumentFile(storageReference, hash);
+    }
+
+    /// <summary>
+    /// Shared by <see cref="SaveImageAsync"/> and <see cref="SaveDocumentAsync"/>:
+    /// writes the upload to <paramref name="rootPath"/>/<paramref name="folderSegment"/>
+    /// under a generated file name and SHA-256 hashes it in the same pass
+    /// via CryptoStream, so callers never read the upload twice. The
+    /// generated name (not the caller-supplied one) is what's actually
+    /// used on disk - never trust a client-provided filename for a path
+    /// segment; the original extension is kept only for a friendlier
+    /// listing.
+    /// </summary>
+    private static async Task<(string StoredFileName, string Sha256Hash)> WriteFileAndHashAsync(
+        string rootPath, string folderSegment, string fileName, Stream content, CancellationToken cancellationToken)
+    {
+        var folder = Path.Combine(rootPath, folderSegment);
+        Directory.CreateDirectory(folder);
+
         var extension = Path.GetExtension(fileName);
         var storedFileName = $"{Guid.NewGuid():N}{extension}";
-        var fullPath = Path.Combine(propertyFolder, storedFileName);
+        var fullPath = Path.Combine(folder, storedFileName);
 
-        // The upload is written to disk and SHA-256 hashed in the same
-        // pass via CryptoStream, so fraud rule 2's fingerprint (see
-        // ImageHash's doc comment on PropertyImage) never requires a
-        // second read of the file.
         using var sha256 = SHA256.Create();
 
         await using (var fileStream = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, bufferSize: 81920, useAsync: true))
@@ -55,8 +95,7 @@ public class LocalFileStorageService : IFileStorageService
         }
 
         var hash = Convert.ToHexString(sha256.Hash!).ToLowerInvariant();
-        var url = $"{_settings.PublicBaseUrl.TrimEnd('/')}/{propertyId}/{storedFileName}";
 
-        return new StoredImageFile(url, hash);
+        return (storedFileName, hash);
     }
 }

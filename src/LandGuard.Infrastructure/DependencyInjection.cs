@@ -103,6 +103,14 @@ public static class DependencyInjection
         // rather than a duplicate wrapper here.
         services.AddScoped<IFraudStoredProcedures, FraudStoredProcedures>();
 
+        // Module 5B (OCR Integration): OcrSettings binds Tesseract's
+        // language/tessdata path; TesseractOcrService runs entirely
+        // locally (no HttpClient/typed-client registration needed, unlike
+        // IGeocodingService, since there is no remote endpoint here at
+        // all).
+        services.Configure<OcrSettings>(configuration.GetSection("Ocr"));
+        services.AddScoped<IOcrService, TesseractOcrService>();
+
         return services;
     }
 }

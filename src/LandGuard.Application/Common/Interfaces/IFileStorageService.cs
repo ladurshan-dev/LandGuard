@@ -21,4 +21,17 @@ public interface IFileStorageService
     /// </summary>
     Task<StoredImageFile> SaveImageAsync(
         int propertyId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Saves a general document upload (a land deed PDF/scan for OCR -
+    /// Module 5B) and computes its SHA-256 fingerprint, scoped by the
+    /// uploading user rather than a property, since OCR extraction can run
+    /// before any property exists. Added alongside <see cref="SaveImageAsync"/>
+    /// rather than a second file-storage service, per Module 5B's explicit
+    /// "reuse the existing local file storage service... do not duplicate"
+    /// instruction - purely additive, no change to SaveImageAsync's
+    /// behavior or callers (PropertyService, Module 4).
+    /// </summary>
+    Task<StoredDocumentFile> SaveDocumentAsync(
+        int uploadedByUserId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default);
 }
