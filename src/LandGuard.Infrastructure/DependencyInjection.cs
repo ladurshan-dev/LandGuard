@@ -119,6 +119,13 @@ public static class DependencyInjection
         // see DummyGovernmentRegistryService's doc comment.
         services.AddScoped<IGovernmentRegistryService, DummyGovernmentRegistryService>();
 
+        // Government Registry module, Phase 5B (deed verification
+        // persistence): follows the exact per-area wrapper pattern
+        // IFraudStoredProcedures/IPropertyStoredProcedures already
+        // establish - no new database-connection abstraction, no EF Core
+        // writes, just another IStoredProcedureExecutor-backed class.
+        services.AddScoped<IGovernmentDeedVerificationStoredProcedures, GovernmentDeedVerificationStoredProcedures>();
+
         return services;
     }
 }

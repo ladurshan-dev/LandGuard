@@ -48,6 +48,14 @@ public interface IApplicationDbContext
 
     DbSet<FraudRuleWeight> FraudRuleWeights { get; }
 
+    // Government Registry module, Phase 5B (deed verification persistence).
+    // Same "every table gets a DbSet" completeness reason as every other
+    // table above - real writes still go through
+    // GovernmentDeedVerificationStoredProcedures, not these.
+    DbSet<DeedVerification> DeedVerifications { get; }
+    DbSet<DeedVerificationField> DeedVerificationFields { get; }
+    DbSet<DeedVerificationReason> DeedVerificationReasons { get; }
+
     // Read-only views -----------------------------------------------------
     DbSet<PropertyLatestRisk> PropertyLatestRisks { get; }
     DbSet<PropertyListing> PropertyListings { get; }

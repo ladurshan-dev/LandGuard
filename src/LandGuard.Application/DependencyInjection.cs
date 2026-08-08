@@ -60,6 +60,13 @@ public static class DependencyInjection
         // explicitly rather than waiting until something calls them.
         services.AddScoped<IGovernmentDeedFraudDetectionService, GovernmentDeedFraudDetectionService>();
 
+        // Government Registry module, Phase 5B (deed verification
+        // persistence orchestrator). No controller consumes this yet
+        // (that's Phase 5C) - registered now anyway, for the same reason
+        // IGovernmentDeedFraudDetectionService was in Phase 5A (see that
+        // registration's own comment, directly above).
+        services.AddScoped<IGovernmentDeedVerificationService, GovernmentDeedVerificationService>();
+
         return services;
     }
 }

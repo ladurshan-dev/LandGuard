@@ -46,6 +46,16 @@ public class ApplicationDbContext : DbContext, IApplicationDbContext
     public DbSet<PriceBenchmark> PriceBenchmarks => Set<PriceBenchmark>();
     public DbSet<FraudRuleWeight> FraudRuleWeights => Set<FraudRuleWeight>();
 
+    // Government Registry module, Phase 5B (deed verification persistence).
+    // Like every other table above, all real writes go through the
+    // matching stored-procedure wrapper (GovernmentDeedVerificationStoredProcedures) -
+    // these DbSets exist for the same "every LandGuardDB table gets a full
+    // EF representation" completeness reason FraudChecks/RiskReports do,
+    // not because anything LINQ-queries them.
+    public DbSet<DeedVerification> DeedVerifications => Set<DeedVerification>();
+    public DbSet<DeedVerificationField> DeedVerificationFields => Set<DeedVerificationField>();
+    public DbSet<DeedVerificationReason> DeedVerificationReasons => Set<DeedVerificationReason>();
+
     // Read-only views -----------------------------------------------------
     public DbSet<PropertyLatestRisk> PropertyLatestRisks => Set<PropertyLatestRisk>();
     public DbSet<PropertyListing> PropertyListings => Set<PropertyListing>();
