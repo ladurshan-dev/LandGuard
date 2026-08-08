@@ -1,5 +1,6 @@
 using LandGuard.Application.Common.Interfaces;
 using LandGuard.Application.Common.Models;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Tesseract;
@@ -22,15 +23,29 @@ namespace LandGuard.Infrastructure.Services;
 /// async overload - a new engine is constructed per extraction and the
 /// whole OCR pass is offloaded via <see cref="Task.Run(Func{object?},CancellationToken)"/>
 /// so it never blocks a request thread for however long OCR takes.
+///
+/// <see cref="OcrSettings.TessDataPath"/> is resolved via
+/// <see cref="ResolveTessDataPath"/> exactly the way
+/// <c>LocalFileStorageService</c> already resolves
+/// <c>FileStorageSettings.RootPath</c>/<c>DocumentsRootPath</c>: rooted
+/// (absolute) as configured, or relative to <see cref="IWebHostEnvironment.ContentRootPath"/>
+/// otherwise - never passed to <see cref="TesseractEngine"/> as a bare
+/// relative string, which previously left it resolved against the OS
+/// process's current working directory instead (see
+/// <see cref="ResolveTessDataPath"/>'s own doc comment for why that was
+/// the root cause of a "tessdata/eng.traineddata" load failure on a
+/// machine using a system-installed Tesseract).
 /// </remarks>
 public class TesseractOcrService : IOcrService
 {
     private readonly OcrSettings _settings;
+    private readonly IWebHostEnvironment _environment;
     private readonly ILogger<TesseractOcrService> _logger;
 
-    public TesseractOcrService(IOptions<OcrSettings> options, ILogger<TesseractOcrService> logger)
+    public TesseractOcrService(IOptions<OcrSettings> options, IWebHostEnvironment environment, ILogger<TesseractOcrService> logger)
     {
         _settings = options.Value;
+        _environment = environment;
         _logger = logger;
     }
 
@@ -48,11 +63,13 @@ public class TesseractOcrService : IOcrService
     {
         var pageImages = IsPdf(contentType) ? RasterizePdf(bytes) : new[] { bytes };
 
-        _logger.LogInformation(
-            "Running Tesseract OCR ({Language}) over {PageCount} page(s), content type {ContentType}",
-            _settings.Language, pageImages.Count, contentType);
+        var tessDataPath = ResolveTessDataPath();
 
-        using var engine = new TesseractEngine(_settings.TessDataPath, _settings.Language, EngineMode.Default);
+        _logger.LogInformation(
+            "Running Tesseract OCR ({Language}) over {PageCount} page(s), content type {ContentType}, tessdata path '{TessDataPath}'",
+            _settings.Language, pageImages.Count, contentType, tessDataPath);
+
+        using var engine = new TesseractEngine(tessDataPath, _settings.Language, EngineMode.Default);
 
         var pageTexts = new List<string>();
         var confidences = new List<float>();
@@ -77,6 +94,32 @@ public class TesseractOcrService : IOcrService
             Confidence = confidences.Count > 0 ? (decimal)(confidences.Average() * 100) : null
         };
     }
+
+    /// <summary>
+    /// Resolves <see cref="OcrSettings.TessDataPath"/> into the actual
+    /// directory handed to <see cref="TesseractEngine"/>'s constructor.
+    /// Previously that raw config value was passed straight through -
+    /// harmless for an absolute path, but for the "tessdata" default it
+    /// meant Tesseract/Leptonica resolved it relative to the OS process's
+    /// current working directory, not this project's own folder. On a
+    /// machine where the process starts from a different working
+    /// directory (IIS Express, a Windows service, `dotnet exec` from
+    /// elsewhere, ...), that relative lookup misses entirely - exactly the
+    /// "Error opening data file tessdata/eng.traineddata... TESSDATA_PREFIX"
+    /// failure this method fixes. Rooted values (e.g. a system-installed
+    /// Tesseract's own tessdata folder, such as
+    /// "C:\Program Files\Tesseract-OCR\tessdata" on this Windows
+    /// development machine, configured via appsettings.Development.json)
+    /// are returned unchanged; a relative value resolves against
+    /// <see cref="IWebHostEnvironment.ContentRootPath"/> instead - the
+    /// exact same rule <c>LocalFileStorageService</c> already applies to
+    /// <c>FileStorageSettings.RootPath</c>/<c>DocumentsRootPath</c>, reused
+    /// here rather than inventing a second convention.
+    /// </summary>
+    private string ResolveTessDataPath() =>
+        Path.IsPathRooted(_settings.TessDataPath)
+            ? _settings.TessDataPath
+            : Path.Combine(_environment.ContentRootPath, _settings.TessDataPath);
 
     private static bool IsPdf(string contentType) =>
         string.Equals(contentType, "application/pdf", StringComparison.OrdinalIgnoreCase);

@@ -45,6 +45,12 @@ public static class DependencyInjection
         // needed for it.
         services.AddScoped<IOcrDocumentService, OcrDocumentService>();
 
+        // Government Registry module, Phase 4 (deed comparison).
+        // DeedFieldComparer, like DocumentFieldExtractor above, is a
+        // static helper with no external dependency or state - no DI
+        // registration needed for it either.
+        services.AddScoped<IGovernmentDeedComparisonService, GovernmentDeedComparisonService>();
+
         return services;
     }
 }

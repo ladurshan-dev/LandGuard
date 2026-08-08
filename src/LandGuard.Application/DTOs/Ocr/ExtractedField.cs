@@ -3,12 +3,14 @@ namespace LandGuard.Application.DTOs.Ocr;
 /// <summary>
 /// One placeholder-parsed field from a deed document's OCR text (Owner
 /// Name, NIC, Property Address, Parcel Number, Registration Number,
-/// Survey Plan Number, Land Extent, District, Province, Date). Produced by
+/// Survey Plan Number, Land Extent, District, Province, Date, plus
+/// PropertyReference/RegisteredPrice/Status added additively for the
+/// Government Registry module's Phase 4 deed comparison). Produced by
 /// simple label/regex heuristics (<c>Services.DocumentFieldExtractor</c>),
-/// not a trained model - deliberately so per Module 5B's scope (no AI, no
-/// fraud comparison). Module 5C is expected to consume this list, likely
-/// replacing or augmenting the heuristics with something more robust once
-/// real deed samples are available.
+/// not a trained model - deliberately so per Module 5B's original scope
+/// (no AI). <c>GovernmentDeedComparisonService</c> is what turns this list
+/// into the normalized <c>SellerDeedData</c>/<c>GovernmentDeedData</c>
+/// shapes <c>DeedFieldComparer</c> actually compares.
 /// </summary>
 public class ExtractedField
 {

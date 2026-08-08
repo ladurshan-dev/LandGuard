@@ -116,6 +116,60 @@ public class LocalFileStorageService : IFileStorageService
         return new StoredDocumentFile(storageReference, hash);
     }
 
+    public Task<Stream?> OpenDocumentAsync(string storageReference, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(storageReference))
+        {
+            return Task.FromResult<Stream?>(null);
+        }
+
+        var rootPath = Path.IsPathRooted(_settings.DocumentsRootPath)
+            ? _settings.DocumentsRootPath
+            : Path.Combine(_environment.ContentRootPath, _settings.DocumentsRootPath);
+        var fullRootPath = Path.GetFullPath(rootPath);
+
+        // Every reference SaveDocumentAsync/SaveGovernmentDocumentAsync
+        // ever returns starts with this fixed "documents/" prefix (see
+        // both methods above) - deliberately generic over which of the two
+        // issued it, rather than a second, government-specific read
+        // method. Anything that doesn't start with it isn't a reference
+        // this service issued, so there is nothing safe to open.
+        const string prefix = "documents/";
+        if (!storageReference.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<Stream?>(null);
+        }
+
+        var relativePath = storageReference[prefix.Length..];
+
+        // Same defensive posture SaveGovernmentDocumentAsync and
+        // DeleteImageAsync already apply to a caller-influenced path
+        // segment: reject ".."/"." before ever touching the filesystem,
+        // then re-verify the fully-resolved path is still inside
+        // DocumentsRootPath as a second, independent check.
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
+        {
+            return Task.FromResult<Stream?>(null);
+        }
+
+        var fullPath = Path.GetFullPath(Path.Combine(new[] { fullRootPath }.Concat(segments).ToArray()));
+
+        if (!fullPath.StartsWith(fullRootPath, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+        {
+            // A tampered/out-of-root reference, or one whose file is
+            // simply no longer there - both are "not available" (see
+            // this method's doc comment), never an exception. A missing
+            // government PDF is exactly Government Scenario F.
+            return Task.FromResult<Stream?>(null);
+        }
+
+        Stream stream = new FileStream(
+            fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize: 81920, useAsync: true);
+
+        return Task.FromResult<Stream?>(stream);
+    }
+
     /// <summary>
     /// Shared by <see cref="SaveImageAsync"/>, <see cref="SaveDocumentAsync"/>
     /// and <see cref="SaveGovernmentDocumentAsync"/>:

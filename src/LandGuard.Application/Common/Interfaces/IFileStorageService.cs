@@ -54,4 +54,31 @@ public interface IFileStorageService
     /// </summary>
     Task<StoredDocumentFile> SaveGovernmentDocumentAsync(
         string recordId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Opens a previously-saved document (seller or government) for
+    /// reading, given the exact <c>StorageReference</c>
+    /// <see cref="SaveDocumentAsync"/> or <see cref="SaveGovernmentDocumentAsync"/>
+    /// returned - the one read-side counterpart both of those write-only
+    /// methods have lacked since Module 5B/Government Registry Phase 3
+    /// (see those methods' doc comments; this is that deferred follow-up,
+    /// now needed by <c>GovernmentDeedComparisonService</c>, Phase 4, to
+    /// re-OCR the trusted government deed). Deliberately generic over
+    /// <em>which</em> kind of document reference is passed in - both
+    /// save methods produce the same <c>"documents/..."</c>-prefixed
+    /// logical shape, so one read method safely serves both rather than
+    /// needing a second, government-specific one.
+    ///
+    /// Returns null - never throws - when
+    /// <paramref name="storageReference"/> doesn't resolve to a real file
+    /// under this service's configured storage root (unrecognised prefix,
+    /// path-traversal attempt, or a reference whose file no longer
+    /// exists): "the document isn't available" is an expected, valid
+    /// outcome here (see Government Scenario F - a record with no PDF on
+    /// file), not an exceptional one. Never resolves outside
+    /// <c>FileStorageSettings.DocumentsRootPath</c>, regardless of what a
+    /// malformed or tampered <paramref name="storageReference"/> contains.
+    /// The caller owns disposing the returned stream.
+    /// </summary>
+    Task<Stream?> OpenDocumentAsync(string storageReference, CancellationToken cancellationToken = default);
 }

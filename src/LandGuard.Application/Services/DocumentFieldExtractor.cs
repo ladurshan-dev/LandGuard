@@ -7,19 +7,33 @@ namespace LandGuard.Application.Services;
 /// Placeholder field extraction over raw OCR text - simple label-based and
 /// regex heuristics, exactly the level of sophistication Module 5B's
 /// brief calls for ("simple regex or placeholder parsing is sufficient").
-/// No AI, no trained model, no fraud comparison of any kind; this is pure,
-/// stateless, dependency-free C# (no OCR/HTTP/DB access), so unlike every
-/// other piece of business logic in this solution it doesn't need an
-/// interface/DI registration - <c>OcrDocumentService</c> calls
-/// <see cref="Extract"/> directly.
+/// No AI, no trained model; this is pure, stateless, dependency-free C#
+/// (no OCR/HTTP/DB access), so unlike every other piece of business logic
+/// in this solution it doesn't need an interface/DI registration -
+/// <c>OcrDocumentService</c> calls <see cref="Extract"/> directly, and so
+/// does <c>GovernmentDeedComparisonService</c> (Phase 4 of the Government
+/// Registry module) - for the government deed PDF's OCR text as well as
+/// the seller's, the exact same extractor, no second implementation.
 ///
 /// Deed layouts vary enough that most fields here are matched by scanning
 /// for a label ("Owner", "District", ...) and taking the text that follows
 /// it on the same line - a first-pass heuristic, not a parser, and one
-/// Module 5C is expected to refine once real deed samples are available.
-/// NIC and Date are the two exceptions: both have a recognizable
+/// this solution is expected to refine once real deed samples are
+/// available. NIC and Date are exceptions: both have a recognizable
 /// self-contained format, so they're matched directly against the whole
 /// text rather than requiring a label.
+///
+/// The four fields below "Province" (PropertyReference, RegisteredPrice,
+/// Status, plus the "Land Size" alias on LandExtent) were added
+/// additively for the Government Registry module's deed-comparison
+/// feature (Phase 4) - the original 10 fields/labels are unchanged, so
+/// every existing caller of <c>POST /api/ocr/extract</c> keeps seeing
+/// exactly the same output for documents it already handled correctly.
+/// RegisteredPrice is intentionally still a raw string here (e.g. "LKR
+/// 5,500,000") - stripping currency symbols/commas and parsing a decimal
+/// is a comparison-specific concern, done by the caller that maps this
+/// output into <c>GovernmentDeedData</c>/<c>SellerDeedData</c>, not by
+/// this general-purpose text extractor.
 /// </summary>
 internal static class DocumentFieldExtractor
 {
@@ -44,17 +58,25 @@ internal static class DocumentFieldExtractor
         ("ParcelNumber", new[] { "Parcel Number", "Parcel No", "Lot Number", "Lot No" }),
         ("RegistrationNumber", new[] { "Registration Number", "Registration No", "Reg No", "Deed Number", "Deed No" }),
         ("SurveyPlanNumber", new[] { "Survey Plan Number", "Survey Plan No", "Plan Number", "Plan No" }),
-        ("LandExtent", new[] { "Land Extent", "Extent", "Area" }),
+        // "Land Size" added (Phase 4) alongside the original three labels -
+        // the Government Registry deed fixtures print "Land Size:", which
+        // this field's original label set did not recognise.
+        ("LandExtent", new[] { "Land Extent", "Extent", "Area", "Land Size" }),
         ("District", new[] { "District" }),
-        ("Province", new[] { "Province" })
+        ("Province", new[] { "Province" }),
+        // ---- Added for Phase 4 (Government Registry deed comparison) ----
+        ("PropertyReference", new[] { "Property Reference", "Property Ref", "Parcel Reference" }),
+        ("RegisteredPrice", new[] { "Registered Price", "Purchase Price", "Consideration", "Price" }),
+        ("Status", new[] { "Status" })
     };
 
     /// <summary>
     /// Runs every field's heuristic over <paramref name="rawText"/> and
-    /// returns exactly 10 <see cref="ExtractedField"/> entries (one per
-    /// field named in Module 5B's brief), in a fixed order, whether or not
-    /// each was found - so a caller can always index/display the full set
-    /// without checking for missing entries.
+    /// returns exactly 13 <see cref="ExtractedField"/> entries (the
+    /// original 10 from Module 5B, plus PropertyReference, RegisteredPrice
+    /// and Status added additively for Phase 4), in a fixed order, whether
+    /// or not each was found - so a caller can always index/display the
+    /// full set without checking for missing entries.
     /// </summary>
     public static IReadOnlyList<ExtractedField> Extract(string? rawText)
     {
