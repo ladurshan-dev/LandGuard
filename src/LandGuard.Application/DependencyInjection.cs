@@ -51,6 +51,15 @@ public static class DependencyInjection
         // registration needed for it either.
         services.AddScoped<IGovernmentDeedComparisonService, GovernmentDeedComparisonService>();
 
+        // Government Registry module, Phase 5A (deed fraud classification).
+        // No controller consumes this yet (that's Phase 5C) - registered
+        // now anyway, alongside IGovernmentDeedComparisonService directly
+        // above, so the composition root already lists every business
+        // service this module exposes in one place, the same reason this
+        // method's own doc comment gives for registering services
+        // explicitly rather than waiting until something calls them.
+        services.AddScoped<IGovernmentDeedFraudDetectionService, GovernmentDeedFraudDetectionService>();
+
         return services;
     }
 }
