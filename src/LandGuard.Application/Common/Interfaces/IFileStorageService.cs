@@ -34,4 +34,24 @@ public interface IFileStorageService
     /// </summary>
     Task<StoredDocumentFile> SaveDocumentAsync(
         int uploadedByUserId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Saves a trusted government deed document (Government Registry
+    /// module, Phase 3) and computes its SHA-256 fingerprint, following the
+    /// exact same generated-filename/hashing mechanism as
+    /// <see cref="SaveDocumentAsync"/>. Scoped by
+    /// <paramref name="recordId"/> - a <c>GovernmentLandRecordDto.RecordId</c>
+    /// business key such as "GR-000001" - not by a seller/user id: this
+    /// document was never uploaded by any LandGuard account, so reusing
+    /// <see cref="SaveDocumentAsync"/>'s <c>uploadedByUserId</c> parameter
+    /// would mean inventing a fake one. Added alongside
+    /// <see cref="SaveDocumentAsync"/> rather than a second file-storage
+    /// service, per the Government Registry module's explicit "reuse the
+    /// existing local file storage service... do not duplicate"
+    /// instruction - purely additive, no change to
+    /// <see cref="SaveImageAsync"/>'s or <see cref="SaveDocumentAsync"/>'s
+    /// behavior or callers.
+    /// </summary>
+    Task<StoredDocumentFile> SaveGovernmentDocumentAsync(
+        string recordId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default);
 }

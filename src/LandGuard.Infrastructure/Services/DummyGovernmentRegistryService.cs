@@ -47,7 +47,8 @@ public class DummyGovernmentRegistryService : IGovernmentRegistryService
             LandSize = 25.5,
             RegisteredPrice = 5_500_000m,
             RegistrationDate = new DateTime(2015, 6, 12),
-            Status = "Active"
+            Status = "Active",
+            DeedDocumentReference = "documents/government-registry/GR-000001/32a7cbd7754a47219ed1ff07e2db79db.pdf"
         },
         new()
         {
@@ -61,7 +62,8 @@ public class DummyGovernmentRegistryService : IGovernmentRegistryService
             LandSize = 12.0,
             RegisteredPrice = 15_000_000m,
             RegistrationDate = new DateTime(2018, 3, 20),
-            Status = "Active"
+            Status = "Active",
+            DeedDocumentReference = "documents/government-registry/GR-000002/a1ae9a1608b64a9d8ed8fe511d49df0d.pdf"
         },
         new()
         {
@@ -75,7 +77,8 @@ public class DummyGovernmentRegistryService : IGovernmentRegistryService
             LandSize = 40.0,
             RegisteredPrice = 8_000_000m,
             RegistrationDate = new DateTime(2012, 11, 5),
-            Status = "Active"
+            Status = "Active",
+            DeedDocumentReference = "documents/government-registry/GR-000003/561de96a1d82462888ed93310997f8ac.pdf"
         },
         new()
         {
@@ -89,7 +92,8 @@ public class DummyGovernmentRegistryService : IGovernmentRegistryService
             LandSize = 18.75,
             RegisteredPrice = 6_200_000m,
             RegistrationDate = new DateTime(2020, 1, 15),
-            Status = "Active"
+            Status = "Active",
+            DeedDocumentReference = "documents/government-registry/GR-000004/cccf81e351fd4eb88c9835ccf5fc0e1a.pdf"
         },
         new()
         {
@@ -103,7 +107,8 @@ public class DummyGovernmentRegistryService : IGovernmentRegistryService
             LandSize = 30.0,
             RegisteredPrice = 4_000_000m,
             RegistrationDate = new DateTime(2016, 8, 9),
-            Status = "Active"
+            Status = "Active",
+            DeedDocumentReference = "documents/government-registry/GR-000005/d4e53204b98b40aea84541b475196471.pdf"
         },
         new()
         {
@@ -117,7 +122,8 @@ public class DummyGovernmentRegistryService : IGovernmentRegistryService
             LandSize = 22.0,
             RegisteredPrice = 5_000_000m,
             RegistrationDate = new DateTime(2010, 4, 22),
-            Status = "Cancelled"
+            Status = "Cancelled",
+            DeedDocumentReference = "documents/government-registry/GR-000006/803aec164a73486b8806caac7fd01bd3.pdf"
         }
     };
 

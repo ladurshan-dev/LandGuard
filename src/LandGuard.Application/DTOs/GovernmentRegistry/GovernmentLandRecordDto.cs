@@ -52,10 +52,19 @@ public class GovernmentLandRecordDto
     public string Status { get; set; } = null!;
 
     /// <summary>
-    /// Path/reference to the government's own deed document, once a later
-    /// phase generates dummy government deed PDFs. Always null throughout
-    /// Phase 1 - creating government deed documents is explicitly out of
-    /// scope for this phase.
+    /// The <c>StoredDocumentFile.StorageReference</c>
+    /// <see cref="Interfaces.IFileStorageService.SaveGovernmentDocumentAsync"/>
+    /// returned for this record's trusted government deed PDF (Phase 3),
+    /// e.g. "documents/government-registry/GR-000001/&lt;guid&gt;.pdf" -
+    /// a logical storage key, deliberately not named "...Path": it is
+    /// never an absolute filesystem path and never a public URL (the same
+    /// distinction <c>StoredDocumentFile</c>'s own doc comment draws for
+    /// the seller-uploaded equivalent). This DTO is returned as-is by
+    /// <c>GovernmentRegistryController</c>'s lookup endpoints, so nothing
+    /// stored here may ever be a real OS path - only Infrastructure
+    /// (<c>LocalFileStorageService</c>) knows how to resolve this
+    /// reference back to a physical location. Null when a record has no
+    /// government deed document on file.
     /// </summary>
-    public string? DeedDocumentPath { get; set; }
+    public string? DeedDocumentReference { get; set; }
 }

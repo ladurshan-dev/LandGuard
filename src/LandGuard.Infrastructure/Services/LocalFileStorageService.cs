@@ -66,8 +66,59 @@ public class LocalFileStorageService : IFileStorageService
         return new StoredDocumentFile(storageReference, hash);
     }
 
+    public async Task<StoredDocumentFile> SaveGovernmentDocumentAsync(
+        string recordId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default)
+    {
+        if (!_settings.AllowedDocumentContentTypes.Contains(contentType, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Unsupported document type '{contentType}'. Allowed: {string.Join(", ", _settings.AllowedDocumentContentTypes)}.",
+                nameof(contentType));
+        }
+
+        // recordId becomes a directory segment below (government-registry/
+        // {recordId}) - reject anything that could escape DocumentsRootPath
+        // or collide with filesystem-reserved names before ever touching
+        // disk, the same defensive posture DeleteImageAsync already applies
+        // to a different caller-influenced path segment. Today's six
+        // dummy RecordIds ("GR-000001" etc.) are always safe, but this
+        // method must stay safe once a real government registry
+        // implementation starts supplying RecordId values LandGuard did
+        // not generate itself.
+        if (string.IsNullOrWhiteSpace(recordId)
+            || recordId is "." or ".."
+            || recordId.IndexOfAny(new[] { '/', '\\' }) >= 0
+            || recordId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new ArgumentException($"'{recordId}' is not a valid government registry record id.", nameof(recordId));
+        }
+
+        // Same root as SaveDocumentAsync (DocumentsRootPath, outside
+        // wwwroot) - government documents are a second logical folder
+        // under that one existing storage tree, not a second physical
+        // storage root. See FileStorageSettings.DocumentsRootPath's doc
+        // comment for why this must stay outside app.UseStaticFiles().
+        var rootPath = Path.IsPathRooted(_settings.DocumentsRootPath)
+            ? _settings.DocumentsRootPath
+            : Path.Combine(_environment.ContentRootPath, _settings.DocumentsRootPath);
+
+        // "government-registry" is a fixed literal, never a numeric
+        // uploadedByUserId - the two document kinds can never collide on
+        // disk, satisfying "completely separated from seller-uploaded
+        // documents" structurally rather than by convention alone.
+        var folderSegment = Path.Combine("government-registry", recordId);
+
+        var (storedFileName, hash) = await WriteFileAndHashAsync(
+            rootPath, folderSegment, fileName, content, cancellationToken);
+
+        var storageReference = $"documents/government-registry/{recordId}/{storedFileName}";
+
+        return new StoredDocumentFile(storageReference, hash);
+    }
+
     /// <summary>
-    /// Shared by <see cref="SaveImageAsync"/> and <see cref="SaveDocumentAsync"/>:
+    /// Shared by <see cref="SaveImageAsync"/>, <see cref="SaveDocumentAsync"/>
+    /// and <see cref="SaveGovernmentDocumentAsync"/>:
     /// writes the upload to <paramref name="rootPath"/>/<paramref name="folderSegment"/>
     /// under a generated file name and SHA-256 hashes it in the same pass
     /// via CryptoStream, so callers never read the upload twice. The
