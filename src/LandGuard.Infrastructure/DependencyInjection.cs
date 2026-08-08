@@ -111,6 +111,14 @@ public static class DependencyInjection
         services.Configure<OcrSettings>(configuration.GetSection("Ocr"));
         services.AddScoped<IOcrService, TesseractOcrService>();
 
+        // Government Registry module (Phase 1 - foundation only): a dummy,
+        // fully in-memory implementation, standing in for a future real
+        // government registry integration. No HttpClient/typed-client
+        // registration needed (unlike IGeocodingService) since there is no
+        // remote endpoint at all yet, and no EF Core/Dapper wiring either -
+        // see DummyGovernmentRegistryService's doc comment.
+        services.AddScoped<IGovernmentRegistryService, DummyGovernmentRegistryService>();
+
         return services;
     }
 }
