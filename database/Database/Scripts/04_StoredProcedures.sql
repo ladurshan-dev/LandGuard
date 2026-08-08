@@ -266,6 +266,59 @@ END;
 GO
 
 /*------------------------------------------------------------------------------
+  usp_PropertyImage_Delete   ->  DELETE /api/properties/{id}/images/{imageId}
+
+  No ownership check here, deliberately mirroring usp_PropertyImage_Add
+  (which also has none) rather than usp_Property_Delete (which enforces
+  ownership itself via RAISERROR): PropertyService.DeleteImageAsync
+  already resolves the property + image and enforces "owner or Admin" in
+  C# before this procedure is ever called, the same split AddImageAsync
+  already uses for this exact sub-resource. Deleting only this one row -
+  it never touches Property, FraudCheck, RiskReport or any other
+  PropertyImage row's ImageHash/ImageURL.
+
+  Primary-image rule: if the deleted image was primary and other images
+  remain for the property, the oldest remaining image (lowest ImageID)
+  is promoted to primary in the same call, so a property is never left
+  with zero primary images while images still exist, and never ends up
+  with more than one.
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE dbo.usp_PropertyImage_Delete
+    @PropertyID INT,
+    @ImageID    INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.PropertyImage WHERE ImageID = @ImageID AND PropertyID = @PropertyID)
+    BEGIN
+        RAISERROR (N'Image not found.', 16, 1);
+        RETURN -1;
+    END
+
+    DECLARE @WasPrimary BIT;
+    SELECT @WasPrimary = IsPrimary FROM dbo.PropertyImage WHERE ImageID = @ImageID;
+
+    DELETE FROM dbo.PropertyImage WHERE ImageID = @ImageID;
+
+    IF @WasPrimary = 1
+    BEGIN
+        DECLARE @NewPrimaryImageID INT;
+
+        SELECT TOP 1 @NewPrimaryImageID = ImageID
+        FROM dbo.PropertyImage
+        WHERE PropertyID = @PropertyID
+        ORDER BY ImageID ASC;
+
+        IF @NewPrimaryImageID IS NOT NULL
+            UPDATE dbo.PropertyImage SET IsPrimary = 1 WHERE ImageID = @NewPrimaryImageID;
+    END
+
+    RETURN 0;
+END;
+GO
+
+/*------------------------------------------------------------------------------
   usp_Property_GetById   ->  GET /api/properties/{id}
   Returns 3 result sets: the listing, its images, and the rule-by-rule report.
 ------------------------------------------------------------------------------*/

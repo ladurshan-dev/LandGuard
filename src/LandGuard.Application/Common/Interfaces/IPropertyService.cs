@@ -75,4 +75,28 @@ public interface IPropertyService
 
     /// <summary>Deletes a listing. Owner-or-Admin is enforced by usp_Property_Delete itself.</summary>
     Task<Result> DeleteAsync(int propertyId, int callerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes one image from a listing the caller owns (or any listing,
+    /// for an Admin) - usp_PropertyImage_Delete has no ownership check of
+    /// its own, exactly like AddImageAsync/usp_PropertyImage_Add, so this
+    /// is enforced entirely at this layer. Removes the physical file
+    /// (best-effort - a missing/already-gone file never fails the
+    /// operation), deletes the PropertyImage row, reassigns primary to
+    /// the oldest remaining image if the deleted one was primary, then
+    /// re-runs the fraud engine (the image set changed, exactly the same
+    /// reason AddImageAsync re-runs it) and returns the refreshed
+    /// <see cref="PropertyDetail"/>.
+    ///
+    /// Throws <see cref="LandGuard.Domain.Exceptions.NotFoundException"/>
+    /// if the property or the image doesn't exist (mapped to 404 by
+    /// ExceptionHandlingMiddleware), or <see cref="UnauthorizedAccessException"/>
+    /// if the caller is neither the owner nor an Admin (mapped to 403) -
+    /// distinct exception types rather than a single generic Result
+    /// failure, specifically so callers manually tampering with
+    /// PropertyID/ImageID get a real 403/404 instead of an indistinguishable
+    /// 400.
+    /// </summary>
+    Task<Result<PropertyDetail>> DeleteImageAsync(
+        int propertyId, int imageId, int callerId, string? callerRole, CancellationToken cancellationToken = default);
 }

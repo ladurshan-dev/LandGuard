@@ -10,6 +10,24 @@ using Microsoft.OpenApi.Models;
 var builder = WebApplication.CreateBuilder(args);
 
 // ---------------------------------------------------------------------
+// Ensures wwwroot exists before the host resolves its static-file
+// provider. IWebHostEnvironment.WebRootFileProvider is computed once,
+// early in startup, from whatever is on disk at that moment - if
+// wwwroot doesn't exist yet, it permanently falls back to a
+// NullFileProvider for this process's lifetime (the "The WebRootPath
+// was not found... Static files may be unavailable" warning), and
+// app.UseStaticFiles() below can never serve anything, even after
+// LocalFileStorageService creates wwwroot/uploads/properties/{id}/...
+// at runtime on the first image upload. Property photos are the only
+// thing FileStorageSettings.RootPath puts under wwwroot (uploaded
+// documents deliberately live outside it - see FileStorageSettings.
+// DocumentsRootPath), so guaranteeing wwwroot itself exists here is
+// enough; LocalFileStorageService already creates the per-property
+// subfolders it needs on demand.
+// ---------------------------------------------------------------------
+Directory.CreateDirectory(Path.Combine(builder.Environment.ContentRootPath, "wwwroot"));
+
+// ---------------------------------------------------------------------
 // Layer registration. Each layer owns its own DI wiring (see
 // LandGuard.Application.DependencyInjection and
 // LandGuard.Infrastructure.DependencyInjection) so Program.cs stays a

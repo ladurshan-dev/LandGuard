@@ -27,3 +27,5 @@ Thumbs.db
 *.mdf
 *.ldf
 *.ndf
+
+src/LandGuard.API/wwwroot/uploads/

@@ -93,4 +93,16 @@ public interface IPropertyStoredProcedures
     /// otherwise. Returns rows deleted (0 or 1).
     /// </summary>
     Task<int> DeleteAsync(int propertyId, int callerUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_PropertyImage_Delete. No ownership check of its own (same
+    /// as <see cref="AddImageAsync"/>/usp_PropertyImage_Add) -
+    /// PropertyService.DeleteImageAsync already resolves and authorizes
+    /// the image before calling this. Applies the "never leave a property
+    /// with zero primary images while images remain" rule server-side: if
+    /// the deleted image was primary, the oldest remaining image (lowest
+    /// ImageID) for the same property is promoted to primary in the same
+    /// call.
+    /// </summary>
+    Task DeleteImageAsync(int propertyId, int imageId, CancellationToken cancellationToken = default);
 }

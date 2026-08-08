@@ -5,6 +5,7 @@ using LandGuard.Application.Common.Models;
 using LandGuard.Application.DTOs.Property;
 using LandGuard.Application.DTOs.Property.Validators;
 using LandGuard.Domain.Enums;
+using LandGuard.Domain.Exceptions;
 
 namespace LandGuard.Application.Services;
 
@@ -257,6 +258,52 @@ public class PropertyService : IPropertyService
         return rowsDeleted > 0
             ? Result.Success()
             : Result.Failure("Property not found.");
+    }
+
+    public async Task<Result<PropertyDetail>> DeleteImageAsync(
+        int propertyId, int imageId, int callerId, string? callerRole, CancellationToken cancellationToken = default)
+    {
+        var existing = await _propertyStoredProcedures.GetByIdAsync(propertyId, cancellationToken);
+        if (existing is null)
+        {
+            throw new NotFoundException("Property not found.");
+        }
+
+        var image = existing.Images.FirstOrDefault(i => i.ImageId == imageId);
+        if (image is null)
+        {
+            // Same "not found" wording/status whether the id is genuinely
+            // nonexistent or just doesn't belong to this PropertyID - the
+            // route nests images under a property (DELETE
+            // /api/properties/{propertyId}/images/{imageId}), so an
+            // ImageID that belongs to a *different* property is exactly as
+            // invalid here as one that doesn't exist at all.
+            throw new NotFoundException("Image not found.");
+        }
+
+        if (existing.Listing.SellerId != callerId && !IsAdmin(callerRole))
+        {
+            throw new UnauthorizedAccessException();
+        }
+
+        // Best-effort - a missing physical file, a malformed stored
+        // ImageURL, or a filesystem error must never block removing the
+        // database row (see IFileStorageService.DeleteImageAsync's doc
+        // comment and TEST 7 in the feature brief).
+        await _fileStorageService.DeleteImageAsync(image.ImageUrl, cancellationToken);
+
+        await _propertyStoredProcedures.DeleteImageAsync(propertyId, imageId, cancellationToken);
+
+        // Re-run the engine now that the image set has changed - the same
+        // reason AddImageAsync re-runs it (Duplicate Image and Missing
+        // Information both depend on which images currently exist).
+        // Deleting one image never touches another property's rows, so
+        // this can only affect this property's own fraud result.
+        await _propertyStoredProcedures.AnalyseAsync(propertyId, cancellationToken);
+
+        var refreshed = await _propertyStoredProcedures.GetByIdAsync(propertyId, cancellationToken);
+
+        return Result<PropertyDetail>.Success(refreshed!);
     }
 
     private async Task<(decimal? Latitude, decimal? Longitude)> ResolveCoordinatesAsync(

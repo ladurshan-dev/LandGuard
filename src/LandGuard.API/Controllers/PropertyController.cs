@@ -130,6 +130,33 @@ public class PropertyController : ControllerBase
             : BadRequest(new { errors = result.Errors });
     }
 
+    /// <summary>
+    /// DELETE /api/properties/{id}/images/{imageId} - owner or Admin,
+    /// enforced in PropertyService (see AddImage's doc comment - image
+    /// sub-resources have no database-side ownership check of their own).
+    /// Re-runs the fraud engine after removing the image, same as
+    /// AddImage, and returns the refreshed <see cref="PropertyDetail"/> so
+    /// the caller can replace its displayed gallery in one round trip.
+    /// </summary>
+    [HttpDelete("{id:int}/images/{imageId:int}")]
+    [Authorize]
+    public async Task<IActionResult> DeleteImage(int id, int imageId, CancellationToken cancellationToken)
+    {
+        var callerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _propertyService.DeleteImageAsync(id, imageId, callerId, _currentUserService.Role, cancellationToken);
+
+        // DeleteImageAsync only ever throws (NotFoundException/
+        // UnauthorizedAccessException, both handled by
+        // ExceptionHandlingMiddleware before execution reaches here) or
+        // succeeds - this mirrors every other action's Succeeded check
+        // anyway, for the same shape as AddImage/Create/Update.
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
+
     /// <summary>PUT /api/properties/{id} - Seller only; ownership is enforced by usp_Property_Update itself. Resets Status to Pending and re-runs the engine.</summary>
     [HttpPut("{id:int}")]
     [Authorize(Policy = AuthorizationPolicies.RequireSeller)]

@@ -305,6 +305,15 @@ GO
       HASH_DUP_C  -> P17 and P20
       HASH_DUP_D  -> P25 and P27
       HASH_DUP_E  -> P28 and P29
+
+  Every ImageURL below has a matching placeholder JPEG committed under
+  LandGuard.API/wwwroot/uploads/properties/<filename> (flat, no
+  PropertyID subfolder - that subfolder shape is only used by the real
+  upload path, LocalFileStorageService.SaveImageAsync). These rows were
+  originally seeded with no backing file at all, which 404'd through
+  app.UseStaticFiles() while every genuinely-uploaded image worked fine.
+  If you add a new seeded PropertyImage row here, add its placeholder
+  file alongside it or the same 404 will recur for that row.
 ==============================================================================*/
 INSERT INTO dbo.PropertyImage (PropertyID, ImageURL, ImageHash, IsPrimary) VALUES
  ( 1, N'/uploads/properties/p1_front.jpg',      'e3b0c44298fc1c149afbf4c8996fb001', 1),

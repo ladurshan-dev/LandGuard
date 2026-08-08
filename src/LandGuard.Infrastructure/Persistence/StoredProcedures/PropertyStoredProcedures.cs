@@ -198,4 +198,16 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
 
         return rowsDeleted;
     }
+
+    public Task DeleteImageAsync(int propertyId, int imageId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { PropertyID = propertyId, ImageID = imageId };
+
+        // usp_PropertyImage_Delete has no result set to read (unlike
+        // usp_PropertyImage_Add's single-column ImageID SELECT) - it's an
+        // UPDATE/DELETE-only procedure, so ExecuteAsync is the right
+        // executor method, matching IStoredProcedureExecutor's own doc
+        // comment for that case.
+        return _executor.ExecuteAsync("dbo.usp_PropertyImage_Delete", parameters, cancellationToken);
+    }
 }

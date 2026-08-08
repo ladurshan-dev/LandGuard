@@ -34,4 +34,20 @@ public interface IFileStorageService
     /// </summary>
     Task<StoredDocumentFile> SaveDocumentAsync(
         int uploadedByUserId, string fileName, string contentType, Stream content, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes a previously-saved property image from disk, given the
+    /// exact URL <see cref="SaveImageAsync"/> returned (and
+    /// <c>PropertyImage.ImageURL</c> stores). Safe to call when the
+    /// file is already missing, when <paramref name="imageUrl"/> doesn't
+    /// resolve to anything under this service's configured storage root,
+    /// or on any filesystem error - all of those are treated as a no-op
+    /// rather than a thrown exception, since the caller's real intent
+    /// ("this image should no longer exist on disk") is already
+    /// satisfied and the <c>PropertyImage</c> database row remains the
+    /// authoritative record either way. Never deletes anything outside
+    /// <c>FileStorageSettings.RootPath</c>, regardless of what a
+    /// malformed or tampered <paramref name="imageUrl"/> contains.
+    /// </summary>
+    Task DeleteImageAsync(string imageUrl, CancellationToken cancellationToken = default);
 }

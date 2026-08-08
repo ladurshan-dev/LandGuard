@@ -66,6 +66,76 @@ public class LocalFileStorageService : IFileStorageService
         return new StoredDocumentFile(storageReference, hash);
     }
 
+    public Task DeleteImageAsync(string imageUrl, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(imageUrl))
+        {
+            return Task.CompletedTask;
+        }
+
+        var rootPath = Path.IsPathRooted(_settings.RootPath)
+            ? _settings.RootPath
+            : Path.Combine(_environment.ContentRootPath, _settings.RootPath);
+        var fullRootPath = Path.GetFullPath(rootPath);
+
+        // ImageURL is always "{PublicBaseUrl}/..." - see SaveImageAsync
+        // above, which is the only thing that ever produces it (both the
+        // {propertyId}/{guid} shape a real upload writes, and the older
+        // flat {filename} shape some seeded rows use - PublicBaseUrl is
+        // the one prefix both share). Anything not starting with that
+        // prefix isn't a URL this service issued, so there's nothing safe
+        // to resolve to a physical path.
+        var publicBaseUrl = _settings.PublicBaseUrl.TrimEnd('/');
+        if (!imageUrl.StartsWith(publicBaseUrl, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.CompletedTask;
+        }
+
+        var relativePath = imageUrl[publicBaseUrl.Length..].TrimStart('/');
+
+        // Reject anything that could escape RootPath (".." traversal, an
+        // empty segment, etc.) before ever touching the filesystem - a
+        // malformed/tampered ImageURL must never translate into deleting
+        // something outside the configured upload directory.
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || segments.Any(segment => segment == ".." || segment == "."))
+        {
+            return Task.CompletedTask;
+        }
+
+        var fullPath = Path.GetFullPath(Path.Combine(fullRootPath, Path.Combine(segments)));
+
+        // Final guard: the fully-resolved absolute path must still be
+        // inside RootPath - defence in depth beyond the ".." segment
+        // check above (also catches a rooted/drive-letter segment
+        // smuggled into the stored URL).
+        if (!fullPath.StartsWith(fullRootPath, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.CompletedTask;
+        }
+
+        try
+        {
+            if (File.Exists(fullPath))
+            {
+                File.Delete(fullPath);
+            }
+        }
+        catch (IOException)
+        {
+            // Locked file, already-missing file raced out from under us,
+            // or some other filesystem hiccup - the PropertyImage row is
+            // the source of truth for "does this image exist", so a
+            // failed physical delete must not fail the whole operation.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Filesystem permission issue - same reasoning as above.
+        }
+
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// Shared by <see cref="SaveImageAsync"/> and <see cref="SaveDocumentAsync"/>:
     /// writes the upload to <paramref name="rootPath"/>/<paramref name="folderSegment"/>
