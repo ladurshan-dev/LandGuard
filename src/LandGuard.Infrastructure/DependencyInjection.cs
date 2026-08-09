@@ -126,6 +126,12 @@ public static class DependencyInjection
         // writes, just another IStoredProcedureExecutor-backed class.
         services.AddScoped<IGovernmentDeedVerificationStoredProcedures, GovernmentDeedVerificationStoredProcedures>();
 
+        // Phase B2 (Admin Property Moderation API): wraps
+        // usp_Admin_ApproveProperty/usp_Admin_RejectProperty - the same
+        // per-area IStoredProcedureExecutor-backed pattern every other
+        // wrapper in this file already follows.
+        services.AddScoped<IAdminStoredProcedures, AdminStoredProcedures>();
+
         return services;
     }
 }

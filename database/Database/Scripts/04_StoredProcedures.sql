@@ -705,6 +705,29 @@ GO
   Sums the weights of every rule that fired, bands the total into
   Low / Medium / High, writes a human-readable summary, updates the listing
   status and notifies the seller.
+
+  PHASE B NOTE (Government Deed Verification module) - READ BEFORE EDITING:
+  RiskScore / RiskLevel / FraudStatus / Summary, as written by this
+  procedure, are SUPPORTING FRAUD INDICATORS ONLY. They are no longer
+  authoritative for deed authenticity - GovernmentDeedVerificationService's
+  Verified/Fraudulent/PriceAnomaly/Unverified/UnverifiedCancelled
+  classification (Application layer, C#) is authoritative for that.
+  Nothing here should be read, displayed, or reasoned about as "proof" a
+  deed is Clean/Suspicious/Fraudulent - that is legacy terminology kept
+  only for backward-compatible history (existing FraudCheck/RiskReport
+  rows, usp_Fraud_GetHistory, the existing fraud report endpoints).
+
+  The dbo.Property.Status auto-transition below (Low -> Approved, else ->
+  Flagged) is UNCHANGED in this phase. A Phase B inspection found that
+  removing it would leave every new/edited property permanently Pending:
+  no other reachable mechanism currently promotes a property out of
+  Pending in the running application. usp_Admin_ApproveProperty/
+  usp_Admin_RejectProperty exist in this database but have no REST
+  endpoint/controller wired to them today (confirmed - AdminController
+  does not exist). Removing this transition therefore requires a
+  deliberately-chosen replacement workflow first (e.g. driven by
+  GovernmentDeedVerificationService's result, or a real admin
+  moderation endpoint) - do not remove or bypass it without one.
 ------------------------------------------------------------------------------*/
 CREATE OR ALTER PROCEDURE dbo.usp_Risk_GenerateReport
     @FraudCheckID INT
@@ -794,7 +817,11 @@ BEGIN
             INSERT INTO dbo.RiskReport (FraudCheckID, RiskScore, RiskLevel, Summary)
             VALUES (@FraudCheckID, @RiskScore, @RiskLevel, @Summary);
 
-        /* Low risk publishes automatically; anything higher waits for an admin */
+        /* Low risk publishes automatically; anything higher waits for an admin.
+           LEGACY INTERIM BEHAVIOR - see the PHASE B NOTE above this procedure.
+           Deliberately left unchanged in Phase B: no other mechanism reachable
+           from the running application currently promotes a property out of
+           Pending. Do not remove without a decided replacement workflow. */
         UPDATE dbo.Property
         SET Status = CASE WHEN @RiskLevel = 'Low' THEN 'Approved' ELSE 'Flagged' END
         WHERE PropertyID = @PropertyID
