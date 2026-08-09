@@ -27,3 +27,14 @@ Thumbs.db
 *.mdf
 *.ldf
 *.ndf
+
+
+## Runtime uploaded files
+
+src/LandGuard.API/App_Data/uploads/
+src/LandGuard.API/wwwroot/uploads/
+
+## Frontend dependencies
+node_modules/
+dist/
+build/
