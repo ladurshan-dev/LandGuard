@@ -703,10 +703,10 @@ GO
 /*------------------------------------------------------------------------------
   usp_Risk_GenerateReport   -  POINT 8 of the engine (RiskReportService)
   Sums the weights of every rule that fired, bands the total into
-  Low / Medium / High, writes a human-readable summary, updates the listing
-  status and notifies the seller.
+  Low / Medium / High, writes a human-readable summary, and notifies the
+  seller. Does NOT change dbo.Property.Status - see the PHASE C NOTE below.
 
-  PHASE B NOTE (Government Deed Verification module) - READ BEFORE EDITING:
+  PHASE B NOTE (Government Deed Verification module):
   RiskScore / RiskLevel / FraudStatus / Summary, as written by this
   procedure, are SUPPORTING FRAUD INDICATORS ONLY. They are no longer
   authoritative for deed authenticity - GovernmentDeedVerificationService's
@@ -717,17 +717,22 @@ GO
   only for backward-compatible history (existing FraudCheck/RiskReport
   rows, usp_Fraud_GetHistory, the existing fraud report endpoints).
 
-  The dbo.Property.Status auto-transition below (Low -> Approved, else ->
-  Flagged) is UNCHANGED in this phase. A Phase B inspection found that
-  removing it would leave every new/edited property permanently Pending:
-  no other reachable mechanism currently promotes a property out of
-  Pending in the running application. usp_Admin_ApproveProperty/
-  usp_Admin_RejectProperty exist in this database but have no REST
-  endpoint/controller wired to them today (confirmed - AdminController
-  does not exist). Removing this transition therefore requires a
-  deliberately-chosen replacement workflow first (e.g. driven by
-  GovernmentDeedVerificationService's result, or a real admin
-  moderation endpoint) - do not remove or bypass it without one.
+  PHASE C NOTE (Property Status Workflow Refactor) - READ BEFORE EDITING:
+  This procedure USED TO auto-transition dbo.Property.Status here
+  (Low -> Approved, else -> Flagged) immediately after every fraud
+  analysis run - see git history / FraudEngine.md for the old behavior.
+  That transition has been REMOVED. A property now stays in whatever
+  status it already had (normally 'Pending', set by
+  usp_Property_Create/usp_Property_Update) after this procedure runs,
+  regardless of RiskLevel. The only two things that now change
+  dbo.Property.Status are usp_Admin_ApproveProperty (-> 'Approved') and
+  usp_Admin_RejectProperty (-> 'Rejected'), both already wired to
+  POST /api/admin/properties/{id}/approve|reject (Phase B2 - see
+  AdminController.cs). This is a deliberate architectural decision:
+  RiskScore/RiskLevel/FraudStatus are supporting risk indicators for the
+  admin to review, not an automatic publication mechanism. Do not
+  reintroduce a Property.Status write here without a new, deliberately
+  chosen decision - see database/Database/Docs/FraudEngine.md.
 ------------------------------------------------------------------------------*/
 CREATE OR ALTER PROCEDURE dbo.usp_Risk_GenerateReport
     @FraudCheckID INT
@@ -817,22 +822,15 @@ BEGIN
             INSERT INTO dbo.RiskReport (FraudCheckID, RiskScore, RiskLevel, Summary)
             VALUES (@FraudCheckID, @RiskScore, @RiskLevel, @Summary);
 
-        /* Low risk publishes automatically; anything higher waits for an admin.
-           LEGACY INTERIM BEHAVIOR - see the PHASE B NOTE above this procedure.
-           Deliberately left unchanged in Phase B: no other mechanism reachable
-           from the running application currently promotes a property out of
-           Pending. Do not remove without a decided replacement workflow. */
-        UPDATE dbo.Property
-        SET Status = CASE WHEN @RiskLevel = 'Low' THEN 'Approved' ELSE 'Flagged' END
-        WHERE PropertyID = @PropertyID
-          AND Status IN ('Pending','Flagged','Approved');
+        /* PHASE C: dbo.Property.Status is deliberately NOT written here - see
+           the PHASE C NOTE above this procedure. RiskLevel/RiskScore are
+           supporting indicators only; Property.Status now changes
+           exclusively via usp_Admin_ApproveProperty/usp_Admin_RejectProperty. */
 
         INSERT INTO dbo.Notification (UserID, Message, RelatedPropertyID)
         VALUES (@SellerID,
                 N'Fraud analysis complete for "' + @Title + N'". Risk: ' + @RiskLevel +
-                N' (' + CAST(@RiskScore AS NVARCHAR(10)) + N'/100). Status: ' +
-                CASE WHEN @RiskLevel = 'Low' THEN N'Published.'
-                     ELSE N'Sent to admin for review.' END,
+                N' (' + CAST(@RiskScore AS NVARCHAR(10)) + N'/100). Your listing is pending admin review.',
                 @PropertyID);
 
         /* High risk raises an alert for every admin */

@@ -53,8 +53,38 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         parameters.Add("@DeedReference", deedReference);
         parameters.Add("@NewPropertyID", dbType: DbType.Int32, direction: ParameterDirection.Output);
 
-        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+        // BUG FIX (PropertyID = 0 on create): usp_Property_Create's own
+        // final statement is "SELECT * FROM dbo.vw_PropertyListing WHERE
+        // PropertyID = @NewPropertyID", but it gets there only after calling
+        // EXEC dbo.usp_Fraud_AnalyseProperty, which itself calls EXEC
+        // dbo.usp_Risk_GenerateReport - and that procedure also SELECTs (the
+        // RiskReport row), as does usp_Fraud_AnalyseProperty's own trailing
+        // "SELECT @FraudCheckID AS FraudCheckID". That makes this a
+        // 3-result-set batch, in this exact order:
+        //   1) RiskReport columns (ReportID, FraudCheckID, RiskScore, ...)
+        //   2) FraudCheckID
+        //   3) the actual property listing row (PropertyListingResult shape)
+        // QuerySingleOrDefaultAsync<PropertyListingResult> (previously used
+        // here) only ever reads the FIRST result set - it was silently
+        // mapping the RiskReport row onto PropertyListingResult, so every
+        // column without a same-named match (PropertyId included) was left
+        // at its default, i.e. PropertyId = 0. QueryMultipleAsync, the same
+        // approach GetByIdAsync already uses below for usp_Property_GetById,
+        // reads each result set in its actual declared order instead. The
+        // first two are read and discarded (they exist only as a side
+        // effect of the inline fraud analysis; a real analysis result is
+        // still returned separately by AnalyseAsync/IPropertyStoredProcedures
+        // whenever a caller actually needs it), and the third and final one
+        // is the property listing this method is meant to return - the real
+        // SCOPE_IDENTITY()-derived PropertyID (already correct in the
+        // stored procedure) finally reaches PropertyListingResult.PropertyId
+        // intact.
+        using var multi = await _executor.QueryMultipleAsync(
             "dbo.usp_Property_Create", parameters, cancellationToken);
+
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // RiskReport row - discarded
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // FraudCheckID - discarded
+        var listing = await multi.ReadSingleOrDefaultAsync<PropertyListingResult>();
 
         return listing!;
     }
@@ -180,8 +210,28 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         // before reaching its final SELECT - Dapper surfaces that as a
         // SqlException here, which this method deliberately does not
         // catch (see IPropertyStoredProcedures.UpdateAsync's doc comment).
-        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+        //
+        // BUG FIX (identical to CreateAsync's above): usp_Property_Update
+        // also calls EXEC dbo.usp_Fraud_AnalyseProperty (which itself calls
+        // EXEC dbo.usp_Risk_GenerateReport) before its own final
+        // "SELECT * FROM dbo.vw_PropertyListing WHERE PropertyID = @PropertyID",
+        // making this the same 3-result-set batch as usp_Property_Create:
+        //   1) RiskReport columns (ReportID, FraudCheckID, RiskScore, ...)
+        //   2) FraudCheckID
+        //   3) the actual property listing row (PropertyListingResult shape)
+        // QuerySingleOrDefaultAsync<PropertyListingResult> only reads the
+        // first result set, so it was mapping the RiskReport row onto
+        // PropertyListingResult - PropertyId (and every other column absent
+        // from that first result set) stayed at its default. QueryMultipleAsync
+        // reads each result set in its actual declared order instead: the
+        // first two are read and discarded, and the third and final one is
+        // the property listing this method is meant to return.
+        using var multi = await _executor.QueryMultipleAsync(
             "dbo.usp_Property_Update", parameters, cancellationToken);
+
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // RiskReport row - discarded
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // FraudCheckID - discarded
+        var listing = await multi.ReadSingleOrDefaultAsync<PropertyListingResult>();
 
         return listing!;
     }

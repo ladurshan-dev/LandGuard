@@ -1,10 +1,36 @@
 # LandGuard — The 8-Point Fraud Detection Engine
 
+> **PHASE C UPDATE — read this before the rest of the document.**
+> RiskScore / RiskLevel / FraudStatus, as calculated below, are **supporting
+> risk indicators only**. They inform an administrator's review; they do
+> **not** decide whether a listing goes live. `dbo.Property.Status` is
+> changed only by:
+> 1. `usp_Property_Create` / `usp_Property_Update` — set/reset to `Pending`.
+> 2. `usp_Admin_ApproveProperty` / `usp_Admin_RejectProperty` — the only
+>    procedures that set `Approved` or `Rejected`, called from
+>    `POST /api/admin/properties/{id}/approve|reject`.
+>
+> Government Deed Verification (separate module, see
+> `Module5B_DeedVerification.sql` / `GovernmentDeedVerificationService`) is
+> the authoritative mechanism for deed authenticity and also does not set
+> `Property.Status` — it records a verification result for the admin to
+> consider alongside the risk indicators below.
+>
+> Earlier versions of this engine had `usp_Risk_GenerateReport`
+> auto-transition `Property.Status` to `Approved` (Low risk) or `Flagged`
+> (Medium/High risk) immediately after scoring. That auto-transition has
+> been **removed**. A property now stays `Pending` after fraud analysis,
+> regardless of risk level, until an administrator explicitly approves or
+> rejects it. The `Flagged` status value still exists in the schema and in
+> historical data for backward compatibility, but new analysis runs no
+> longer assign it.
+
 Implemented entirely in the database:
 
 - `usp_Fraud_AnalyseProperty` — runs rules 1–7 and writes one `FraudCheck` row
 - `usp_Risk_GenerateReport` — point 8: combines the results into a risk score,
-  bands it, writes the summary, sets the listing status, raises notifications
+  bands it, writes the summary, and notifies the seller. Does **not** change
+  `dbo.Property.Status` (see the Phase C note above).
 
 The API calls `usp_Fraud_AnalyseProperty` on every submission and every
 resubmission, which satisfies NFR04.
@@ -49,14 +75,22 @@ account rather than this particular listing.
 
 ## Banding (FR05)
 
-| Band | Score | Listing status | What the buyer sees |
+| Band | Score | Effect on admin review | What the buyer sees* |
 |---|---|---|---|
-| **Low** | 0–40 | `Approved` — published automatically | Green badge |
-| **Medium** | 41–70 | `Flagged` — admin review queue | Amber badge |
-| **High** | 71–100 | `Flagged` + alert to every admin | Red badge |
+| **Low** | 0–40 | Listed as low risk in admin review | Green badge |
+| **Medium** | 41–70 | Listed as medium risk in admin review | Amber badge |
+| **High** | 71–100 | Listed as high risk + alert to every admin | Red badge |
+
+\* The badge is only visible once an administrator has approved the listing
+(`Property.Status = 'Approved'`) — the score itself never publishes or
+hides a listing.
 
 The banding is enforced by `CK_RiskReport_Banding`, so an incorrectly banded
 score cannot be written to the database at all.
+
+Every listing, regardless of band, remains `Pending` after fraud analysis
+and waits in the admin review queue until explicitly approved or rejected
+(Phase C — see the note at the top of this document).
 
 ---
 
@@ -89,9 +123,17 @@ usp_Risk_GenerateReport   ◄── POINT 8
         ├─ level  = fn_RiskLevelFromScore(score)
         ├─ summary= bulleted list of every rule that fired
         ├─ INSERT INTO RiskReport
-        ├─ UPDATE Property.Status  (Low → Approved, otherwise Flagged)
-        ├─ NOTIFY seller
+        ├─ NOTIFY seller ("pending admin review")
         └─ NOTIFY all admins if High
+        │
+        ▼
+   Property.Status remains 'Pending' (unchanged by this procedure)
+        │
+        ▼
+Admin reviews (risk indicators + government deed verification result)
+        │
+        ├─ usp_Admin_ApproveProperty  → Property.Status = 'Approved'
+        └─ usp_Admin_RejectProperty   → Property.Status = 'Rejected'
 ```
 
 ---
@@ -102,7 +144,10 @@ usp_Risk_GenerateReport   ◄── POINT 8
 
 Verified seller with a phone number, complete description, deed reference,
 images, valid Colombo coordinates, priced at the district benchmark.
-No rule fires. Published automatically.
+No rule fires. Seed data records this property as already `Approved` (an
+administrator reviewed and approved it) — under the current engine, a Low
+score no longer approves a listing by itself; every listing waits for
+admin approval regardless of score.
 
 ### Property 28 — score 70 (Medium, upper boundary)
 
