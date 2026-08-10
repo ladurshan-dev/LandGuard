@@ -269,4 +269,19 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
 
         return listing!;
     }
+
+    public async Task DeleteImageAsync(int propertyId, int imageId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { PropertyID = propertyId, ImageID = imageId };
+
+        // usp_PropertyImage_Delete has no result set to read - it only
+        // DELETEs/UPDATEs (the delete itself, plus the primary-image
+        // reassignment when applicable) - ExecuteAsync is the same
+        // no-result-set path IStoredProcedureExecutor documents for
+        // exactly this shape. RAISERRORs ("Image not found") before doing
+        // either if imageId doesn't belong to propertyId - Dapper surfaces
+        // that as a SqlException here, deliberately left uncaught (see
+        // IPropertyStoredProcedures.DeleteImageAsync's doc comment).
+        await _executor.ExecuteAsync("dbo.usp_PropertyImage_Delete", parameters, cancellationToken);
+    }
 }

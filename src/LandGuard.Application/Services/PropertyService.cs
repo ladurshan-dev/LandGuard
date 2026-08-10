@@ -272,6 +272,64 @@ public class PropertyService : IPropertyService
         return Result<PropertyListingResult>.Success(withdrawn);
     }
 
+    public async Task<Result<PropertyDetail>> DeleteImageAsync(
+        int propertyId,
+        int imageId,
+        int callerId,
+        string? callerRole,
+        CancellationToken cancellationToken = default)
+    {
+        var existing = await _propertyStoredProcedures.GetByIdAsync(propertyId, cancellationToken);
+        if (existing is null)
+        {
+            return Result<PropertyDetail>.Failure("Property not found.");
+        }
+
+        if (existing.Listing.SellerId != callerId && !IsAdmin(callerRole))
+        {
+            return Result<PropertyDetail>.Failure("Only the property's owner or an administrator may delete images from it.");
+        }
+
+        var image = existing.Images.FirstOrDefault(i => i.ImageId == imageId);
+        if (image is null)
+        {
+            return Result<PropertyDetail>.Failure("Image not found.");
+        }
+
+        // Delete the database row (and let the stored procedure promote a
+        // new Primary image if the deleted one was Primary) before
+        // touching the filesystem - the database row is the source of
+        // truth for whether the image exists, not the file.
+        await _propertyStoredProcedures.DeleteImageAsync(propertyId, imageId, cancellationToken);
+
+        // Best-effort physical cleanup: a storage failure here must not
+        // undo or fail the already-successful database deletion above (see
+        // IFileStorageService.DeleteImageAsync's doc comment).
+        try
+        {
+            await _fileStorageService.DeleteImageAsync(image.ImageUrl, cancellationToken);
+        }
+        catch (IOException)
+        {
+            // Physical file locked/already gone - the database record is
+            // already gone, which is what every other read path relies on.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Filesystem permission issue - same reasoning as above.
+        }
+
+        // Re-run the engine now that this image is gone, so Duplicate
+        // Image and Missing Information reflect the listing's true current
+        // state (see IPropertyStoredProcedures.AnalyseAsync's doc comment
+        // and AddImageAsync's identical call above).
+        await _propertyStoredProcedures.AnalyseAsync(propertyId, cancellationToken);
+
+        var refreshed = await _propertyStoredProcedures.GetByIdAsync(propertyId, cancellationToken);
+
+        return Result<PropertyDetail>.Success(refreshed!);
+    }
+
     private async Task<(decimal? Latitude, decimal? Longitude)> ResolveCoordinatesAsync(
         decimal? latitude, decimal? longitude, string location, string? district, CancellationToken cancellationToken)
     {

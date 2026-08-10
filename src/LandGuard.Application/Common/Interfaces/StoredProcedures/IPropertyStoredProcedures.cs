@@ -106,4 +106,21 @@ public interface IPropertyStoredProcedures
     /// doing nothing.
     /// </summary>
     Task<PropertyListingResult> WithdrawAsync(int propertyId, int sellerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_PropertyImage_Delete. Deliberately no ownership check
+    /// here, mirroring <see cref="AddImageAsync"/> rather than
+    /// <see cref="UpdateAsync"/>/<see cref="WithdrawAsync"/> - the
+    /// procedure itself has none either (see its own header comment),
+    /// because <c>PropertyService.DeleteImageAsync</c> already resolves
+    /// the property + image and enforces "owner or Admin" in C# before
+    /// this is ever called, the same split <c>AddImageAsync</c> uses for
+    /// this exact sub-resource. If <paramref name="imageId"/> doesn't
+    /// belong to <paramref name="propertyId"/>, the procedure RAISERRORs
+    /// ("Image not found") rather than silently affecting zero rows. The
+    /// procedure also reassigns Primary to the oldest remaining image
+    /// when the deleted one was Primary - nothing about that needs to
+    /// surface here, the caller just re-reads the property afterwards.
+    /// </summary>
+    Task DeleteImageAsync(int propertyId, int imageId, CancellationToken cancellationToken = default);
 }

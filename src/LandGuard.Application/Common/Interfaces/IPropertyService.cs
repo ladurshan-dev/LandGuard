@@ -90,4 +90,29 @@ public interface IPropertyService
     /// </summary>
     Task<Result<PropertyListingResult>> WithdrawAsync(
         int propertyId, int sellerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes one image belonging to a listing the caller owns (or any
+    /// listing, for an Admin - usp_PropertyImage_Delete has no ownership
+    /// check of its own, exactly like usp_PropertyImage_Add, so "owner or
+    /// Admin" is enforced entirely at this layer, the same split
+    /// <see cref="AddImageAsync"/> already uses for this sub-resource).
+    /// Deletes the dbo.PropertyImage row, then the physical file (the
+    /// database row is the source of truth: if the physical delete fails
+    /// or the file is already gone, that does not undo the successful
+    /// database deletion - see LocalFileStorageService.DeleteImageAsync's
+    /// doc comment). If the deleted image was Primary, the stored
+    /// procedure promotes another remaining image automatically; if no
+    /// images remain, the property is left with none, which every other
+    /// read path (GetById, Search, GetBySeller) already tolerates. Re-runs
+    /// the fraud engine afterwards for the same reason AddImageAsync does -
+    /// Duplicate Image and Missing Information both depend on which images
+    /// currently exist. Returns the refreshed <see cref="PropertyDetail"/>.
+    /// </summary>
+    Task<Result<PropertyDetail>> DeleteImageAsync(
+        int propertyId,
+        int imageId,
+        int callerId,
+        string? callerRole,
+        CancellationToken cancellationToken = default);
 }

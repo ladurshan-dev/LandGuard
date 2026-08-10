@@ -170,6 +170,53 @@ public class LocalFileStorageService : IFileStorageService
         return Task.FromResult<Stream?>(stream);
     }
 
+    public Task DeleteImageAsync(string imageUrl, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(imageUrl))
+        {
+            return Task.CompletedTask;
+        }
+
+        var rootPath = Path.IsPathRooted(_settings.RootPath)
+            ? _settings.RootPath
+            : Path.Combine(_environment.ContentRootPath, _settings.RootPath);
+        var fullRootPath = Path.GetFullPath(rootPath);
+
+        // Every reference SaveImageAsync ever returns starts with this
+        // fixed PublicBaseUrl prefix (see that method above) - anything
+        // that doesn't isn't a reference this service issued, so there is
+        // nothing safe to delete. Same "not available is a valid outcome,
+        // never an exception" posture OpenDocumentAsync already takes.
+        var prefix = _settings.PublicBaseUrl.TrimEnd('/') + "/";
+        if (!imageUrl.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.CompletedTask;
+        }
+
+        var relativePath = imageUrl[prefix.Length..];
+
+        // Same defensive posture OpenDocumentAsync applies to a
+        // caller-influenced path segment: reject ".."/"." before ever
+        // touching the filesystem, then re-verify the fully-resolved path
+        // is still inside RootPath as a second, independent check.
+        var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length == 0 || segments.Any(segment => segment is "." or ".."))
+        {
+            return Task.CompletedTask;
+        }
+
+        var fullPath = Path.GetFullPath(Path.Combine(new[] { fullRootPath }.Concat(segments).ToArray()));
+
+        if (!fullPath.StartsWith(fullRootPath, StringComparison.OrdinalIgnoreCase) || !File.Exists(fullPath))
+        {
+            return Task.CompletedTask;
+        }
+
+        File.Delete(fullPath);
+
+        return Task.CompletedTask;
+    }
+
     /// <summary>
     /// Shared by <see cref="SaveImageAsync"/>, <see cref="SaveDocumentAsync"/>
     /// and <see cref="SaveGovernmentDocumentAsync"/>:

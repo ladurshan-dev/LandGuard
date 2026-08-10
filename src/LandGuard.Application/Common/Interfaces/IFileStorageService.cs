@@ -81,4 +81,18 @@ public interface IFileStorageService
     /// The caller owns disposing the returned stream.
     /// </summary>
     Task<Stream?> OpenDocumentAsync(string storageReference, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Deletes the physical file previously saved by <see cref="SaveImageAsync"/>,
+    /// given the exact <c>ImageURL</c> it returned (and that
+    /// <c>PropertyImage.ImageURL</c> stores). Best-effort and defensive,
+    /// the same posture <see cref="OpenDocumentAsync"/> already takes for
+    /// document references: an unrecognised prefix, a path-traversal
+    /// attempt, or a file that is simply already gone is treated as
+    /// nothing to do, never an exception - the database row is the source
+    /// of truth for whether the image exists, not the filesystem, so a
+    /// missing/already-deleted file must not block
+    /// <c>PropertyService.DeleteImageAsync</c> from completing.
+    /// </summary>
+    Task DeleteImageAsync(string imageUrl, CancellationToken cancellationToken = default);
 }

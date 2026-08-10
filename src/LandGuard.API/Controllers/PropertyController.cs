@@ -185,4 +185,33 @@ public class PropertyController : ControllerBase
             ? Ok(result.Data)
             : BadRequest(new { errors = result.Errors });
     }
+
+    /// <summary>
+    /// DELETE /api/properties/{id}/images/{imageId} - owner or Admin,
+    /// enforced by PropertyService.DeleteImageAsync itself (the database
+    /// has no ownership check for this sub-resource, exactly like
+    /// AddImage above, so this is the one place it's actually checked).
+    /// Deletes the PropertyImage row, the physical file, promotes a new
+    /// Primary image if the deleted one was Primary, and re-runs the fraud
+    /// engine - then returns the refreshed PropertyDetail so the caller's
+    /// gallery can be replaced in one round trip without a second request.
+    /// </summary>
+    [HttpDelete("{id:int}/images/{imageId:int}")]
+    [Authorize]
+    public async Task<IActionResult> DeleteImage(int id, int imageId, CancellationToken cancellationToken)
+    {
+        var callerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _propertyService.DeleteImageAsync(id, imageId, callerId, _currentUserService.Role, cancellationToken);
+
+        // BadRequest for every failure, matching AddImage above (its
+        // sibling operation on this exact sub-resource) - "not found",
+        // "not yours" and "image not found" are all plain Result.Failure
+        // outcomes here, not exceptions, so there is no distinguishing
+        // status code to pick between them.
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
 }
