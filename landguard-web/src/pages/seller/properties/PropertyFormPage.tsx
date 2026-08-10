@@ -15,7 +15,9 @@ import {
 } from '@mui/material';
 import { DashboardLayout } from '../../../layouts/DashboardLayout';
 import { useAuth } from '../../../hooks/useAuth';
+import { DeedDocumentUpload } from '../../../components/property/DeedDocumentUpload';
 import { createProperty, getPropertyById, updateProperty } from '../../../services/propertyService';
+import { verifyDeed } from '../../../services/deedVerificationService';
 import { ApiError } from '../../../utils/apiError';
 
 /**
@@ -74,6 +76,18 @@ export default function PropertyFormPage() {
   const [isLoadingExisting, setIsLoadingExisting] = useState(isEditMode);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Deed upload (Phase D) - CREATE mode only. EDIT mode deliberately has no
+  // deed upload here at all: this project has no way yet to know whether a
+  // property already has a verified deed on file, so re-requiring one on
+  // every edit would either force a pointless re-upload or silently
+  // overwrite a perfectly good past verification - neither is safe to
+  // invent. An optional "Replace / Re-verify Deed" action belongs on
+  // SellerPropertyDetailsPage instead, where the seller can already see
+  // whether a verification exists before deciding to replace it.
+  const [selectedDeedFile, setSelectedDeedFile] = useState<File | null>(null);
+  const [deedFileError, setDeedFileError] = useState<string | null>(null);
+  const [submitPhase, setSubmitPhase] = useState<'idle' | 'creating' | 'verifying'>('idle');
 
   const {
     register,
@@ -143,12 +157,18 @@ export default function PropertyFormPage() {
 
   const onSubmit = async (values: PropertyFormValues) => {
     setSubmitError(null);
+    setDeedFileError(null);
 
     const trimmedDescription = values.description.trim();
     const trimmedDistrict = values.district.trim();
     const trimmedDeedReference = values.deedReference.trim();
     const latitude = values.latitude.trim() === '' ? undefined : Number(values.latitude);
     const longitude = values.longitude.trim() === '' ? undefined : Number(values.longitude);
+
+    if (!isEditMode && !selectedDeedFile) {
+      setDeedFileError('Upload the deed document that proves ownership of this property before listing it.');
+      return;
+    }
 
     try {
       if (isEditMode && propertyId !== null) {
@@ -173,6 +193,14 @@ export default function PropertyFormPage() {
         });
         navigate(`/seller/properties/${propertyId}`);
       } else {
+        // Two-step orchestration (Phase D): the existing property-create
+        // API stays JSON-only (CreatePropertyRequest is unchanged), so the
+        // deed is uploaded as a second request once the real PropertyID is
+        // known, using the existing POST /api/deed-verification/{id}
+        // multipart endpoint - not a new combined multipart create
+        // endpoint. The property is created first and is Pending either
+        // way; nothing below can undo that.
+        setSubmitPhase('creating');
         const created = await createProperty({
           title: values.title.trim(),
           description: trimmedDescription === '' ? undefined : trimmedDescription,
@@ -184,12 +212,40 @@ export default function PropertyFormPage() {
           price: Number(values.price),
           deedReference: trimmedDeedReference === '' ? undefined : trimmedDeedReference,
         });
-        navigate(`/seller/properties/${created.propertyId}`);
+
+        setSubmitPhase('verifying');
+        try {
+          await verifyDeed(created.propertyId, selectedDeedFile!);
+          navigate(`/seller/properties/${created.propertyId}`);
+        } catch {
+          // The property (e.g. #34) already exists and stays Pending
+          // regardless of this failure - never deleted, never approved or
+          // rejected automatically, and never navigated to /0. The seller
+          // lands on their new property's own details page instead, which
+          // reports the failure and offers a Retry Deed Verification
+          // action (see SellerPropertyDetailsPage's handling of this
+          // navigation state) rather than silently losing the failure here.
+          navigate(`/seller/properties/${created.propertyId}`, {
+            state: { deedVerificationFailed: true },
+          });
+        }
       }
     } catch (error) {
       setSubmitError(error instanceof ApiError ? error.message : 'Something went wrong. Please try again.');
+    } finally {
+      setSubmitPhase('idle');
     }
   };
+
+  const submitButtonLabel = isSubmitting
+    ? submitPhase === 'verifying'
+      ? 'Verifying deed...'
+      : isEditMode
+        ? 'Saving...'
+        : 'Creating property...'
+    : isEditMode
+      ? 'Save Changes'
+      : 'List Property';
 
   return (
     <DashboardLayout title={isEditMode ? 'Edit Property' : 'List a Property'} user={user} maxWidth="md">
@@ -351,6 +407,21 @@ export default function PropertyFormPage() {
                 />
               </Grid>
 
+              {!isEditMode && (
+                <Grid size={12}>
+                  <DeedDocumentUpload
+                    selectedFile={selectedDeedFile}
+                    onFileSelected={(file) => {
+                      setSelectedDeedFile(file);
+                      setDeedFileError(null);
+                    }}
+                    onRemove={() => setSelectedDeedFile(null)}
+                    disabled={isSubmitting}
+                    error={deedFileError}
+                  />
+                </Grid>
+              )}
+
               {isEditMode && (
                 <Grid size={12}>
                   <FormControlLabel
@@ -368,7 +439,7 @@ export default function PropertyFormPage() {
                 disabled={isSubmitting}
                 startIcon={isSubmitting ? <CircularProgress size={18} color="inherit" /> : undefined}
               >
-                {isSubmitting ? 'Saving...' : isEditMode ? 'Save Changes' : 'List Property'}
+                {submitButtonLabel}
               </Button>
               <Button variant="text" disabled={isSubmitting} onClick={() => navigate(-1)}>
                 Cancel

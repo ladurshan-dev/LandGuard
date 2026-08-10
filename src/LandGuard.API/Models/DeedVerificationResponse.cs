@@ -1,3 +1,4 @@
+using LandGuard.Application.Common.Models;
 using LandGuard.Application.DTOs.DeedComparison;
 using LandGuard.Domain.Enums;
 
@@ -48,13 +49,69 @@ public class DeedVerificationResponse
 
     public DateTime GeneratedDate { get; set; }
 
-    public static DeedVerificationResponse FromOutcome(GovernmentDeedVerificationOutcome outcome)
+    /// <summary>
+    /// The seller's uploaded deed document's storage reference (Phase D),
+    /// copied from <see cref="GovernmentDeedFraudDetectionResult.SellerDocumentReference"/>
+    /// - a storage key an authenticated retrieval endpoint could resolve
+    /// later (see <c>StoredDocumentFile.StorageReference</c>'s own doc
+    /// comment), never a raw filesystem path. No document-download endpoint
+    /// exists in this phase, so the frontend uses this only to confirm a
+    /// deed was uploaded and verified, not to fetch/display the file
+    /// itself.
+    /// </summary>
+    public string? SellerDocumentReference { get; set; }
+
+    public static DeedVerificationResponse FromOutcome(GovernmentDeedVerificationOutcome outcome) =>
+        FromFraudDetectionResult(outcome.DeedVerificationId, outcome.FraudDetectionResult);
+
+    /// <summary>
+    /// Builds the identical response shape from a persisted
+    /// <see cref="DeedVerificationHistoryEntry"/> (Phase D's new GET
+    /// verification-read endpoint) - reused by
+    /// <see cref="FromOutcome"/> above so the POST (just-ran verification)
+    /// and GET (previously-persisted verification) responses are
+    /// field-for-field identical, and so this class's existing
+    /// <see cref="DescribeReason"/> mapping serves both without
+    /// duplication.
+    /// </summary>
+    public static DeedVerificationResponse FromHistoryEntry(DeedVerificationHistoryEntry entry)
     {
-        var result = outcome.FraudDetectionResult;
+        var record = entry.Record;
 
         return new DeedVerificationResponse
         {
-            DeedVerificationId = outcome.DeedVerificationId,
+            DeedVerificationId = record.DeedVerificationId,
+            PropertyId = record.PropertyId,
+            VerificationStatus = record.VerificationStatus,
+            GovernmentRecordId = record.GovernmentRecordId,
+            GovernmentRecordStatus = record.GovernmentRecordStatus,
+            Summary = record.Summary ?? string.Empty,
+            Reasons = entry.Reasons
+                .Select(reason => new DeedVerificationReasonEntry
+                {
+                    Reason = reason.Reason,
+                    Description = Enum.TryParse<DeedFraudReason>(reason.Reason, out var parsed) ? DescribeReason(parsed) : reason.Reason
+                })
+                .ToList(),
+            Evidence = entry.Fields
+                .Select(field => new DeedFieldComparisonResult
+                {
+                    FieldName = field.FieldName,
+                    GovernmentValue = field.GovernmentValue,
+                    SellerValue = field.SellerValue,
+                    Match = field.IsMatch,
+                    Message = field.Message ?? string.Empty
+                })
+                .ToList(),
+            GeneratedDate = record.VerifiedDate,
+            SellerDocumentReference = record.SellerDocumentReference
+        };
+    }
+
+    private static DeedVerificationResponse FromFraudDetectionResult(int deedVerificationId, GovernmentDeedFraudDetectionResult result) =>
+        new()
+        {
+            DeedVerificationId = deedVerificationId,
             PropertyId = result.PropertyId,
             VerificationStatus = result.Status.ToString(),
             GovernmentRecordId = result.GovernmentRecordId,
@@ -64,9 +121,9 @@ public class DeedVerificationResponse
                 .Select(reason => new DeedVerificationReasonEntry { Reason = reason.ToString(), Description = DescribeReason(reason) })
                 .ToList(),
             Evidence = result.Evidence,
-            GeneratedDate = result.GeneratedDate
+            GeneratedDate = result.GeneratedDate,
+            SellerDocumentReference = result.SellerDocumentReference
         };
-    }
 
     /// <summary>
     /// Fixed, reviewed one-sentence text per <see cref="DeedFraudReason"/> -

@@ -143,7 +143,7 @@ CREATE TABLE dbo.Property
     CONSTRAINT PK_Property            PRIMARY KEY CLUSTERED (PropertyID),
     CONSTRAINT FK_Property_Seller     FOREIGN KEY (SellerID)
         REFERENCES dbo.Users (UserID) ON DELETE NO ACTION ON UPDATE NO ACTION,
-    CONSTRAINT CK_Property_Status     CHECK (Status IN ('Pending','Approved','Flagged','Rejected')),
+    CONSTRAINT CK_Property_Status     CHECK (Status IN ('Pending','Approved','Flagged','Rejected','Withdrawn')),
     CONSTRAINT CK_Property_Price      CHECK (Price > 0),
     CONSTRAINT CK_Property_Size       CHECK (Size > 0)
 );
@@ -151,6 +151,28 @@ GO
 
 ALTER TABLE dbo.Property ADD CONSTRAINT DF_Property_Status     DEFAULT ('Pending')      FOR Status;
 ALTER TABLE dbo.Property ADD CONSTRAINT DF_Property_UploadDate DEFAULT (SYSDATETIME())  FOR UploadDate;
+GO
+
+/*------------------------------------------------------------------------------
+  Idempotent upgrade for an ALREADY-EXISTING LandGuardDB (Phase F, Property
+  Withdrawal). dbo.Property's CREATE TABLE above is not guarded by
+  IF OBJECT_ID(...) IS NULL, so on a database that already has this table the
+  block above is skipped entirely and CK_Property_Status is never touched.
+  This block re-adds the constraint with 'Withdrawn' included ONLY if it is
+  missing, so it is safe to run against both a brand-new database (no-op,
+  constraint already created above with 'Withdrawn' present) and an existing
+  one (actually performs the upgrade). Safe to re-run any number of times.
+------------------------------------------------------------------------------*/
+IF EXISTS (
+    SELECT 1 FROM sys.check_constraints
+    WHERE name = 'CK_Property_Status'
+      AND OBJECT_DEFINITION(OBJECT_ID) NOT LIKE '%Withdrawn%'
+)
+BEGIN
+    ALTER TABLE dbo.Property DROP CONSTRAINT CK_Property_Status;
+    ALTER TABLE dbo.Property ADD CONSTRAINT CK_Property_Status
+        CHECK (Status IN ('Pending','Approved','Flagged','Rejected','Withdrawn'));
+END
 GO
 
 

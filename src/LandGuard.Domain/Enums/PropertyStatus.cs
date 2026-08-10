@@ -25,5 +25,16 @@ public enum PropertyStatus
     Flagged = 3,
 
     /// <summary>Rejected by an admin. The seller may edit and resubmit, which resets status to Pending.</summary>
-    Rejected = 4
+    Rejected = 4,
+
+    /// <summary>
+    /// Voluntarily withdrawn by the owning Seller (Phase F). Not a fraud
+    /// verdict - a listing lifecycle state only. Removed from Buyer
+    /// browsing and the Admin review queue, but the property row and every
+    /// piece of DeedVerification/FraudCheck/RiskReport/AdminAction/
+    /// Notification history is preserved untouched. Not reachable through
+    /// the normal edit flow (usp_Property_Update refuses to touch a
+    /// Withdrawn property) - there is no "Relist" action yet.
+    /// </summary>
+    Withdrawn = 5
 }

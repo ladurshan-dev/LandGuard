@@ -41,6 +41,25 @@ public class AdminController : ControllerBase
     }
 
     /// <summary>
+    /// GET /api/admin/properties/review - Admin only. The review queue:
+    /// every property genuinely awaiting manual attention (normally
+    /// Status = Pending since Phase C, plus any legacy Flagged rows or
+    /// anything with an open suspicious report) - see
+    /// <see cref="IAdminModerationService.GetReviewQueueAsync"/>'s own doc
+    /// comment for exactly what it reads and why. Read-only; does not
+    /// change any Property.Status.
+    /// </summary>
+    [HttpGet("review")]
+    public async Task<IActionResult> GetReviewQueue(CancellationToken cancellationToken)
+    {
+        var result = await _adminModerationService.GetReviewQueueAsync(cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
+
+    /// <summary>
     /// POST /api/admin/properties/{propertyId}/approve - Admin only.
     /// <paramref name="request"/> is optional. AdminId always comes from
     /// the caller's JWT, never the request body.

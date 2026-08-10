@@ -3,6 +3,8 @@ using LandGuard.Application.Common.Interfaces;
 using LandGuard.Application.Common.Interfaces.StoredProcedures;
 using LandGuard.Application.Common.Models;
 using LandGuard.Application.DTOs.Admin;
+using LandGuard.Domain.ReadModels;
+using Microsoft.EntityFrameworkCore;
 
 namespace LandGuard.Application.Services;
 
@@ -19,15 +21,18 @@ namespace LandGuard.Application.Services;
 public class AdminModerationService : IAdminModerationService
 {
     private readonly IAdminStoredProcedures _adminStoredProcedures;
+    private readonly IApplicationDbContext _context;
     private readonly IValidator<ApprovePropertyRequest> _approveValidator;
     private readonly IValidator<RejectPropertyRequest> _rejectValidator;
 
     public AdminModerationService(
         IAdminStoredProcedures adminStoredProcedures,
+        IApplicationDbContext context,
         IValidator<ApprovePropertyRequest> approveValidator,
         IValidator<RejectPropertyRequest> rejectValidator)
     {
         _adminStoredProcedures = adminStoredProcedures;
+        _context = context;
         _approveValidator = approveValidator;
         _rejectValidator = rejectValidator;
     }
@@ -62,5 +67,24 @@ public class AdminModerationService : IAdminModerationService
             adminId, propertyId, request.Reason, cancellationToken);
 
         return Result<PropertyListingResult>.Success(listing);
+    }
+
+    public async Task<Result<IReadOnlyList<FlaggedProperty>>> GetReviewQueueAsync(
+        CancellationToken cancellationToken = default)
+    {
+        // Read-only projection over dbo.vw_FlaggedProperty via EF Core -
+        // no stored-procedure wrapper needed (see this method's own doc
+        // comment on IAdminModerationService). Same ordering
+        // usp_Admin_GetFlagged itself uses (ORDER BY RiskScore DESC,
+        // UploadDate ASC), so the highest-risk, longest-waiting listings
+        // surface first regardless of which path a caller reaches this
+        // data through.
+        var items = await _context.FlaggedProperties
+            .AsNoTracking()
+            .OrderByDescending(property => property.RiskScore)
+            .ThenBy(property => property.UploadDate)
+            .ToListAsync(cancellationToken);
+
+        return Result<IReadOnlyList<FlaggedProperty>>.Success(items);
     }
 }

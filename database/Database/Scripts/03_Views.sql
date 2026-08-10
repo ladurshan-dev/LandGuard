@@ -150,9 +150,10 @@ SELECT
       WHERE sr.PropertyID = v.PropertyID AND sr.Status <> 'Resolved') AS OpenReportCount,
     DATEDIFF(DAY, v.UploadDate, SYSDATETIME()) AS DaysWaiting
 FROM dbo.vw_PropertyListing AS v
-WHERE v.Status IN ('Flagged','Pending')
-   OR EXISTS (SELECT 1 FROM dbo.SuspiciousReport AS sr
-               WHERE sr.PropertyID = v.PropertyID AND sr.Status <> 'Resolved');
+WHERE v.Status <> 'Withdrawn'  -- Phase F: a withdrawn listing must never appear in the active Admin review queue, even via the open-report branch below
+  AND (v.Status IN ('Flagged','Pending')
+       OR EXISTS (SELECT 1 FROM dbo.SuspiciousReport AS sr
+                   WHERE sr.PropertyID = v.PropertyID AND sr.Status <> 'Resolved'));
 GO
 
 

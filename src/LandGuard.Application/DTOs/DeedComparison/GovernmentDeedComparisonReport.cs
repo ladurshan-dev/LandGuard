@@ -41,4 +41,20 @@ public class GovernmentDeedComparisonReport
     public IReadOnlyList<DeedFieldComparisonResult> Fields { get; set; } = Array.Empty<DeedFieldComparisonResult>();
 
     public DateTime GeneratedDate { get; set; }
+
+    /// <summary>
+    /// The seller's just-uploaded deed file's storage reference (Phase D -
+    /// Seller Deed PDF Upload), i.e. the same value
+    /// <c>OcrResultResponse.DocumentReference</c>/<c>StoredDocumentFile.StorageReference</c>
+    /// already carry after <c>IOcrDocumentService.ExtractAsync</c> saves the
+    /// file. Populated whenever OCR succeeds (both the normal comparison
+    /// path and the "MissingOrCancelledGovernmentRecord" early-return path
+    /// below, since the seller's document is already saved in either case)
+    /// so <c>GovernmentDeedVerificationStoredProcedures.CreateVerificationAsync</c>
+    /// can persist it as <c>DeedVerification.SellerDocumentReference</c>
+    /// instead of always writing null. A storage key, never a raw
+    /// filesystem path - see <c>StoredDocumentFile.StorageReference</c>'s own
+    /// doc comment.
+    /// </summary>
+    public string? SellerDocumentReference { get; set; }
 }

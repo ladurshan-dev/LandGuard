@@ -259,6 +259,19 @@ public class PropertyService : IPropertyService
             : Result.Failure("Property not found.");
     }
 
+    public async Task<Result<PropertyListingResult>> WithdrawAsync(
+        int propertyId, int sellerId, CancellationToken cancellationToken = default)
+    {
+        // Ownership and the allowed source-state transitions (Pending/Approved
+        // only) are enforced by usp_Property_Withdraw itself - a mismatched
+        // sellerId or a disallowed source state (Flagged/Rejected/already
+        // Withdrawn) raises a SqlException rather than returning here,
+        // exactly like UpdateAsync above.
+        var withdrawn = await _propertyStoredProcedures.WithdrawAsync(propertyId, sellerId, cancellationToken);
+
+        return Result<PropertyListingResult>.Success(withdrawn);
+    }
+
     private async Task<(decimal? Latitude, decimal? Longitude)> ResolveCoordinatesAsync(
         decimal? latitude, decimal? longitude, string location, string? district, CancellationToken cancellationToken)
     {

@@ -70,4 +70,7 @@ public class GovernmentDeedFraudDetectionResult
 
     /// <summary>Copied from <see cref="GovernmentDeedComparisonReport.GeneratedDate"/> - when the underlying comparison was produced, not when it was classified (classification is a pure, synchronous, immediately-following step - see <c>GovernmentDeedFraudDetectionService</c>).</summary>
     public DateTime GeneratedDate { get; set; }
+
+    /// <summary>Copied from <see cref="GovernmentDeedComparisonReport.SellerDocumentReference"/> (Phase D) - passed through unchanged by <c>GovernmentDeedFraudDetectionService.BuildResult</c> so <c>GovernmentDeedVerificationStoredProcedures.CreateVerificationAsync</c> can persist it, regardless of which <see cref="DeedVerificationStatus"/> was reached.</summary>
+    public string? SellerDocumentReference { get; set; }
 }

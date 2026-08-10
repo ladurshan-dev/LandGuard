@@ -16,8 +16,20 @@
  * it as C#'s null/default on this backend's model binding.
  */
 
-/** dbo.Property.Status, set by usp_Property_Create/usp_Property_Update and the fraud engine. Admin approve/reject/flag exist only as raw stored procedures today (usp_Admin_ApproveProperty/usp_Admin_RejectProperty) - no REST endpoint changes this value yet. */
-export type PropertyStatus = 'Pending' | 'Approved' | 'Flagged' | 'Rejected';
+/**
+ * dbo.Property.Status, set by usp_Property_Create/usp_Property_Update and
+ * the fraud engine, and by usp_Admin_ApproveProperty/
+ * usp_Admin_RejectProperty (POST /api/admin/properties/{id}/approve|reject)
+ * for Approved/Rejected. 'Withdrawn' (Phase F, Property Withdrawal / Soft
+ * Delete) is set only by usp_Property_Withdraw
+ * (POST /api/properties/{id}/withdraw) - a Seller voluntarily removing
+ * their own listing from active review/browsing. It is a listing lifecycle
+ * state, not a fraud verdict: DeedVerification/FraudCheck/RiskReport
+ * history stays attached and valid, and the property row is never deleted.
+ * Not reachable through the normal edit flow (usp_Property_Update refuses
+ * to touch a Withdrawn property) - there is no "Relist" action yet.
+ */
+export type PropertyStatus = 'Pending' | 'Approved' | 'Flagged' | 'Rejected' | 'Withdrawn';
 
 /** dbo.RiskReport.RiskLevel banding - "Low" until the fraud engine has run at least once. */
 export type RiskLevel = 'Low' | 'Medium' | 'High';

@@ -75,4 +75,19 @@ public interface IPropertyService
 
     /// <summary>Deletes a listing. Owner-or-Admin is enforced by usp_Property_Delete itself.</summary>
     Task<Result> DeleteAsync(int propertyId, int callerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Withdraws a listing the caller owns (Phase F - Property Withdrawal /
+    /// Soft Delete). Sets Status to "Withdrawn" without deleting the row or
+    /// any child/audit record - this is the Seller-facing replacement for
+    /// "Delete" (see usp_Property_Withdraw's own header comment for why:
+    /// DeedVerification history cannot be safely hard-deleted). Ownership,
+    /// and which source states may be withdrawn (Pending/Approved only),
+    /// are enforced by the stored procedure itself, exactly like
+    /// <see cref="UpdateAsync"/> - a mismatched owner or a disallowed
+    /// source state (Flagged/Rejected/already-Withdrawn) raises a
+    /// SqlException rather than silently no-opping.
+    /// </summary>
+    Task<Result<PropertyListingResult>> WithdrawAsync(
+        int propertyId, int sellerId, CancellationToken cancellationToken = default);
 }

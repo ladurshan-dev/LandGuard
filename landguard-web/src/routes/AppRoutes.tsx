@@ -13,6 +13,7 @@ import SellerPropertyDetailsPage from '../pages/seller/properties/SellerProperty
 import BrowsePropertiesPage from '../pages/buyer/properties/BrowsePropertiesPage';
 import BuyerPropertyDetailsPage from '../pages/buyer/properties/BuyerPropertyDetailsPage';
 import AdminPropertiesPage from '../pages/admin/properties/AdminPropertiesPage';
+import AdminPropertyReviewPage from '../pages/admin/properties/AdminPropertyReviewPage';
 import AdminPropertyDetailsPage from '../pages/admin/properties/AdminPropertyDetailsPage';
 
 /**
@@ -127,6 +128,14 @@ export function AppRoutes() {
         element={
           <ProtectedRoute allowedRoles={['Admin']}>
             <AdminPropertiesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/properties/review"
+        element={
+          <ProtectedRoute allowedRoles={['Admin']}>
+            <AdminPropertyReviewPage />
           </ProtectedRoute>
         }
       />

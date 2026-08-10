@@ -159,4 +159,30 @@ public class PropertyController : ControllerBase
             ? NoContent()
             : NotFound(new { errors = result.Errors });
     }
+
+    /// <summary>
+    /// POST /api/properties/{id}/withdraw - Seller only (Phase F, Property
+    /// Withdrawal / Soft Delete). This is the Seller-facing replacement for
+    /// "Delete": it sets Status to "Withdrawn" instead of physically
+    /// deleting the row, so DeedVerification/FraudCheck/RiskReport/
+    /// AdminAction/Notification history is fully preserved. Ownership and
+    /// the allowed source states (Pending/Approved only) are enforced by
+    /// usp_Property_Withdraw itself, exactly like Update above. SellerId
+    /// always comes from the caller's JWT, never the request body.
+    /// DELETE /api/properties/{id} above is unchanged and remains an
+    /// Admin-only hard-delete/cleanup path.
+    /// </summary>
+    [HttpPost("{id:int}/withdraw")]
+    [Authorize(Policy = AuthorizationPolicies.RequireSeller)]
+    public async Task<IActionResult> Withdraw(int id, CancellationToken cancellationToken)
+    {
+        var sellerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _propertyService.WithdrawAsync(id, sellerId, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
 }

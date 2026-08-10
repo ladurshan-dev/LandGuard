@@ -97,6 +97,13 @@ public class GovernmentDeedComparisonService : IGovernmentDeedComparisonService
 
         var sellerDeed = MapToSellerDeedData(ocrResult.Data!.Fields, property.Listing.Price);
 
+        // The seller's own document is already saved by this point
+        // (IOcrDocumentService.ExtractAsync's SaveDocumentAsync call, above)
+        // regardless of what the government-record lookup below finds -
+        // captured once here so every return path (Scenario F included)
+        // can carry it through to persistence.
+        var sellerDocumentReference = ocrResult.Data!.DocumentReference;
+
         var governmentRecord = await ResolveGovernmentRecordAsync(property.Listing.DeedReference, sellerDeed, cancellationToken);
 
         // Scenario F (missing/cancelled): resolved via
@@ -109,7 +116,8 @@ public class GovernmentDeedComparisonService : IGovernmentDeedComparisonService
             || !string.Equals(governmentRecord.Status, "Active", StringComparison.OrdinalIgnoreCase)
             || string.IsNullOrWhiteSpace(governmentRecord.DeedDocumentReference))
         {
-            return Result<GovernmentDeedComparisonReport>.Success(BuildMissingOrCancelledReport(propertyId, governmentRecord));
+            return Result<GovernmentDeedComparisonReport>.Success(
+                BuildMissingOrCancelledReport(propertyId, governmentRecord, sellerDocumentReference));
         }
 
         await using var governmentStream = await _fileStorageService.OpenDocumentAsync(governmentRecord.DeedDocumentReference, cancellationToken);
@@ -119,7 +127,8 @@ public class GovernmentDeedComparisonService : IGovernmentDeedComparisonService
             // readable on disk (missing/moved/corrupted reference) - same
             // "unavailable" outcome as a genuinely missing record, per
             // IFileStorageService.OpenDocumentAsync's own doc comment.
-            return Result<GovernmentDeedComparisonReport>.Success(BuildMissingOrCancelledReport(propertyId, governmentRecord));
+            return Result<GovernmentDeedComparisonReport>.Success(
+                BuildMissingOrCancelledReport(propertyId, governmentRecord, sellerDocumentReference));
         }
 
         var governmentContentType = InferContentType(governmentRecord.DeedDocumentReference);
@@ -138,7 +147,8 @@ public class GovernmentDeedComparisonService : IGovernmentDeedComparisonService
             GovernmentRecordStatus = governmentRecord.Status,
             OverallOutcome = overallOutcome,
             Fields = fieldResults,
-            GeneratedDate = DateTime.UtcNow
+            GeneratedDate = DateTime.UtcNow,
+            SellerDocumentReference = sellerDocumentReference
         };
 
         return Result<GovernmentDeedComparisonReport>.Success(report);
@@ -191,7 +201,8 @@ public class GovernmentDeedComparisonService : IGovernmentDeedComparisonService
         return null;
     }
 
-    private static GovernmentDeedComparisonReport BuildMissingOrCancelledReport(int propertyId, GovernmentLandRecordDto? record) => new()
+    private static GovernmentDeedComparisonReport BuildMissingOrCancelledReport(
+        int propertyId, GovernmentLandRecordDto? record, string? sellerDocumentReference) => new()
     {
         PropertyId = propertyId,
         GovernmentRecordId = record?.RecordId,
@@ -199,7 +210,8 @@ public class GovernmentDeedComparisonService : IGovernmentDeedComparisonService
         GovernmentRecordStatus = record?.Status,
         OverallOutcome = "MissingOrCancelledGovernmentRecord",
         Fields = Array.Empty<DeedFieldComparisonResult>(),
-        GeneratedDate = DateTime.UtcNow
+        GeneratedDate = DateTime.UtcNow,
+        SellerDocumentReference = sellerDocumentReference
     };
 
     private static SellerDeedData MapToSellerDeedData(IReadOnlyList<ExtractedField> fields, decimal propertyAskingPrice)

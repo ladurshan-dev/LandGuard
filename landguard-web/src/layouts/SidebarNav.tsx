@@ -7,6 +7,7 @@ import DashboardIcon from '@mui/icons-material/Dashboard';
 import HomeWorkIcon from '@mui/icons-material/HomeWork';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import FactCheckIcon from '@mui/icons-material/FactCheck';
+import RateReviewIcon from '@mui/icons-material/RateReview';
 import { LogoutButton } from '../components/LogoutButton';
 import { landguardColors } from '../theme/landguardTheme';
 import type { AuthUser, UserRole } from '../types/auth';
@@ -38,6 +39,7 @@ const NAV_ITEMS_BY_ROLE: Record<UserRole, NavItem[]> = {
   ],
   Admin: [
     { label: 'Overview', to: '/admin/dashboard', icon: <DashboardIcon fontSize="small" /> },
+    { label: 'Property Reviews', to: '/admin/properties/review', icon: <RateReviewIcon fontSize="small" /> },
     { label: 'Property Oversight', to: '/admin/properties', icon: <FactCheckIcon fontSize="small" /> },
   ],
 };
@@ -64,6 +66,18 @@ interface SidebarNavProps {
 export function SidebarNav({ user, onNavigate }: SidebarNavProps) {
   const location = useLocation();
   const navItems = NAV_ITEMS_BY_ROLE[user.role];
+
+  // The longest matching `to` wins when more than one nav item's path is a
+  // prefix of the current route (e.g. Admin's "/admin/properties/review"
+  // vs. "/admin/properties" both matching /admin/properties/review) - only
+  // that one item is highlighted, instead of both at once.
+  const activeItem = navItems.reduce<NavItem | null>((best, item) => {
+    const matches = location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
+    if (!matches) {
+      return best;
+    }
+    return !best || item.to.length > best.to.length ? item : best;
+  }, null);
 
   return (
     <Box
@@ -117,7 +131,7 @@ export function SidebarNav({ user, onNavigate }: SidebarNavProps) {
 
       <List sx={{ flexGrow: 1, px: 1.5, py: 2 }}>
         {navItems.map((item) => {
-          const isActive = location.pathname === item.to || location.pathname.startsWith(`${item.to}/`);
+          const isActive = activeItem?.to === item.to;
 
           return (
             <ListItemButton

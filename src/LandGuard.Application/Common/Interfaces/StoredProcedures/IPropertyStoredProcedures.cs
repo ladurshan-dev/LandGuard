@@ -93,4 +93,17 @@ public interface IPropertyStoredProcedures
     /// otherwise. Returns rows deleted (0 or 1).
     /// </summary>
     Task<int> DeleteAsync(int propertyId, int callerUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_Property_Withdraw (Phase F - Property Withdrawal / Soft
+    /// Delete). Seller-only (never Admin - Admin's cleanup path stays
+    /// <see cref="DeleteAsync"/>). <paramref name="sellerId"/> must be the
+    /// caller's own id, the same rule <see cref="UpdateAsync"/> follows -
+    /// ownership is enforced by the procedure itself. Sets Status to
+    /// "Withdrawn" without touching any child/audit record; a Flagged,
+    /// Rejected, or already-Withdrawn property raises a SqlException
+    /// (translated to 400) with a specific reason instead of silently
+    /// doing nothing.
+    /// </summary>
+    Task<PropertyListingResult> WithdrawAsync(int propertyId, int sellerId, CancellationToken cancellationToken = default);
 }

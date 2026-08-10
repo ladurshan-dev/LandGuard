@@ -25,6 +25,73 @@
 > historical data for backward compatibility, but new analysis runs no
 > longer assign it.
 
+> **PHASE E UPDATE — Supporting Risk Indicator Refactor.**
+> Three roles are now clearly separated, and nothing below changes that:
+> 1. **RiskScore / RiskLevel / FraudStatus** (this document) — the legacy,
+>    supporting listing-risk score. Useful corroboration, never proof of
+>    anything about the deed itself.
+> 2. **Government Deed Verification** (`Module5B_DeedVerification.sql` /
+>    `GovernmentDeedVerificationService`) — the authoritative comparison of
+>    the seller's uploaded deed against the trusted government registry
+>    record (`Verified` / `Fraudulent` / `PriceAnomaly` / `Unverified` /
+>    `UnverifiedCancelled`).
+> 3. **Admin Moderation** (`usp_Admin_ApproveProperty` /
+>    `usp_Admin_RejectProperty`) — the only thing that ever changes
+>    `Property.Status` to `Approved`/`Rejected`, informed by both of the
+>    above but not automated from either.
+>
+> Two changes landed this phase, both additive/backward-compatible:
+>
+> - **`usp_Fraud_AnalyseProperty`, rule 7 (Missing Information)** used to
+>   treat a `NULL Property.DeedReference` as "deed missing" - but
+>   `DeedReference` is an optional free-text field, separate from the
+>   seller's actually-uploaded-and-verified deed document
+>   (`dbo.DeedVerification.SellerDocumentReference`, Phase D). A seller who
+>   uploaded and verified a real deed but left the optional text field
+>   blank was incorrectly flagged as missing their deed. The rule now
+>   treats the deed as present when **either** `DeedReference` is filled in
+>   **or** a `DeedVerification` row exists for the property with a non-null
+>   `SellerDocumentReference`. `DeedReference` itself is unchanged and
+>   still optional. **This makes `usp_Fraud_AnalyseProperty` depend on
+>   `dbo.DeedVerification` existing** (created by
+>   `Module5B_DeedVerification.sql`, applied separately from the six
+>   numbered canonical scripts, same as before) - a fresh
+>   `00_RunAll.sql`-only database can still create this procedure (SQL
+>   Server defers name resolution), it just cannot successfully **run** it
+>   until `Module5B_DeedVerification.sql` has also been applied, the same
+>   dependency the C# backend (`DeedVerificationController` etc.) already
+>   has.
+> - **`GovernmentDeedVerificationService.VerifyAndPersistAsync`** (C#, not
+>   SQL) now re-triggers `usp_Fraud_AnalyseProperty` (via the existing
+>   `IPropertyStoredProcedures.AnalyseAsync` wrapper, the same one Property
+>   Create/Update already call - no new procedure) immediately after a
+>   verification successfully persists. Without this, the very first
+>   `FraudCheck`/`RiskReport` snapshot - taken when the property is
+>   created, before the seller's second-step deed upload has happened yet
+>   (see the Seller Deed PDF Upload workflow) - would still show
+>   `MissingInfoCheck = 1` and never refresh until the seller separately
+>   edited the listing. This call cannot affect `Property.Status` (see the
+>   Phase C note above) and is best-effort: if it fails, the just-persisted
+>   verification result is unaffected, and the risk snapshot simply stays
+>   at its previous value until the next successful analysis run.
+>
+> Also softened (wording only, no rule/weight/threshold change): the
+> summary text and notifications `usp_Risk_GenerateReport` writes no longer
+> say "fraud detection rules"/"fraud indicators"/"HIGH RISK... scored"; they
+> say "risk analysis completed"/"listing risk indicators"/"potential
+> listing concerns detected... review may be required" instead, so they
+> read as supporting-signal language rather than a fraud verdict.
+>
+> On the frontend, `PropertyFraudPanel`/`RiskIndicator` were renamed from
+> "Fraud & Risk Assessment" to **"Supporting Risk Indicators"** and no
+> longer render `FraudStatus` ("Clean"/"Suspicious"/"Fraudulent") as a
+> colored chip anywhere (property cards, review queue, details pages) -
+> that string remains in the API/DB for backward compatibility (nothing
+> below was deleted, renamed, or restructured), it is simply no longer
+> presented as if it were a deed-authenticity verdict. Per-rule point
+> values are hidden from the default Seller/Buyer view and shown only in
+> Admin diagnostics.
+
 Implemented entirely in the database:
 
 - `usp_Fraud_AnalyseProperty` — runs rules 1–7 and writes one `FraudCheck` row
@@ -49,7 +116,7 @@ Weights live in `dbo.FraudRuleWeight` and total exactly **100**.
 | 4 | Deed Reference Duplicate | `DEED_DUPLICATE` | 20 | Same `DeedReference` on another `Pending`/`Approved`/`Flagged` listing |
 | 5 | Seller History | `SELLER_HISTORY` | 12 | Seller has ≥ 2 rejected listings, or ≥ 2 resolved reports against their listings |
 | 6 | Location Validation | `LOCATION_INVALID` | 10 | Coordinates NULL, or outside 5.9–9.9 °N / 79.6–81.9 °E |
-| 7 | Missing Information | `MISSING_INFO` | 8 | No deed, description under 30 characters, no images, no district, or seller has no phone |
+| 7 | Missing Information | `MISSING_INFO` | 8 | No deed (neither `DeedReference` text nor a verified `DeedVerification.SellerDocumentReference` - Phase E), description under 30 characters, no images, no district, or seller has no phone |
 | 8 | **Risk Score** | — | **= 100** | Sum of the weights above, capped at 100 |
 
 ### Why these weights
@@ -111,7 +178,7 @@ usp_Fraud_AnalyseProperty
         ├─ CHECK 4  Deed Duplicate       → Property.DeedReference
         ├─ CHECK 5  Seller History       → rejected listings + resolved reports
         ├─ CHECK 6  Location Validation  → Latitude / Longitude bounding box
-        └─ CHECK 7  Missing Information  → mandatory field completeness
+        └─ CHECK 7  Missing Information  → mandatory field completeness (deed = DeedReference OR verified SellerDocumentReference)
         │
         ▼
    INSERT INTO FraudCheck (7 bit flags)

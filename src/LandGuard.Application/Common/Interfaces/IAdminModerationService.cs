@@ -1,5 +1,6 @@
 using LandGuard.Application.Common.Models;
 using LandGuard.Application.DTOs.Admin;
+using LandGuard.Domain.ReadModels;
 
 namespace LandGuard.Application.Common.Interfaces;
 
@@ -41,4 +42,22 @@ public interface IAdminModerationService
     /// </summary>
     Task<Result<PropertyListingResult>> RejectPropertyAsync(
         int propertyId, int adminId, RejectPropertyRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The admin review queue - every property genuinely awaiting manual
+    /// attention. Reads <c>dbo.vw_FlaggedProperty</c> (the same view
+    /// <c>usp_Admin_GetFlagged</c> reads) directly through
+    /// <see cref="IApplicationDbContext"/> rather than a new Dapper
+    /// stored-procedure wrapper: that view is already mapped as a
+    /// keyless EF Core read model
+    /// (<see cref="LandGuard.Domain.ReadModels.FlaggedProperty"/>,
+    /// <c>IApplicationDbContext.FlaggedProperties</c>) with no existing
+    /// caller, so this is the smallest addition that reuses what already
+    /// exists instead of duplicating the view's own filter logic in C#.
+    /// Despite its name (unchanged, to avoid touching the view itself),
+    /// the view already includes <c>Status = 'Pending'</c> rows - the
+    /// normal review state since Phase C - alongside any legacy
+    /// <c>Flagged</c> rows and anything with an open suspicious report.
+    /// </summary>
+    Task<Result<IReadOnlyList<FlaggedProperty>>> GetReviewQueueAsync(CancellationToken cancellationToken = default);
 }

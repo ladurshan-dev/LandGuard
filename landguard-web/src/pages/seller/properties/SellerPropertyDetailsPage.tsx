@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link as RouterLink, useNavigate, useParams } from 'react-router-dom';
+import { Link as RouterLink, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Alert,
   Box,
@@ -25,7 +25,8 @@ import { useAuth } from '../../../hooks/useAuth';
 import { PropertyStatusChip } from '../../../components/property/PropertyStatusChip';
 import { PropertyImageGallery } from '../../../components/property/PropertyImageGallery';
 import { PropertyFraudPanel } from '../../../components/property/PropertyFraudPanel';
-import { deleteProperty, deletePropertyImage, getPropertyById, uploadPropertyImage } from '../../../services/propertyService';
+import { SellerDeedVerificationSection } from '../../../components/property/SellerDeedVerificationSection';
+import { deletePropertyImage, getPropertyById, uploadPropertyImage, withdrawProperty } from '../../../services/propertyService';
 import { formatCurrency, formatDate, formatSize } from '../../../utils/format';
 import { ApiError } from '../../../utils/apiError';
 import type { PropertyDetail } from '../../../types/property';
@@ -34,17 +35,29 @@ import type { PropertyDetail } from '../../../types/property';
 export default function SellerPropertyDetailsPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams<{ id: string }>();
   const propertyId = id ? Number(id) : null;
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Set only by PropertyFormPage's create-mode navigation, when property
+  // creation succeeded but the immediate deed upload/verification failed
+  // (see that page's onSubmit) - the property itself (this page) still
+  // exists and stays Pending; the Deed Verification section below already
+  // shows its own "not completed yet" state with the same upload control
+  // as the retry path, so this banner only needs to explain why the seller
+  // landed here instead of silently repeating that state.
+  const deedVerificationFailedOnCreate = Boolean(
+    (location.state as { deedVerificationFailed?: boolean } | null)?.deedVerificationFailed,
+  );
 
   const [detail, setDetail] = useState<PropertyDetail | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isWithdrawDialogOpen, setIsWithdrawDialogOpen] = useState(false);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
   const [isPrimaryImage, setIsPrimaryImage] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -81,17 +94,22 @@ export default function SellerPropertyDetailsPage() {
   }
 
   const isOwner = detail?.listing.sellerId === user.userId;
+  const isWithdrawn = detail?.listing.status === 'Withdrawn';
 
-  const handleConfirmDelete = async () => {
-    setIsDeleting(true);
-    setDeleteError(null);
+  const handleConfirmWithdraw = async () => {
+    setIsWithdrawing(true);
+    setWithdrawError(null);
 
     try {
-      await deleteProperty(propertyId);
+      await withdrawProperty(propertyId);
+      // Navigate back to the list rather than faking the status change here
+      // - SellerPropertiesPage re-fetches from the backend on mount, so the
+      // listing reappears there with its real, authoritative Withdrawn
+      // status instead of a client-guessed one.
       navigate('/seller/properties', { replace: true });
     } catch (error) {
-      setDeleteError(error instanceof ApiError ? error.message : 'Something went wrong. Please try again.');
-      setIsDeleting(false);
+      setWithdrawError(error instanceof ApiError ? error.message : 'Something went wrong. Please try again.');
+      setIsWithdrawing(false);
     }
   };
 
@@ -157,6 +175,13 @@ export default function SellerPropertyDetailsPage() {
         <Alert severity="error">Property not found.</Alert>
       )}
 
+      {!isLoading && !loadError && detail && isOwner && deedVerificationFailedOnCreate && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          Property created successfully, but deed verification could not be completed. Upload your deed document
+          below to try again.
+        </Alert>
+      )}
+
       {!isLoading && !loadError && detail && isOwner && (
         <Grid container spacing={3}>
           <Grid size={12}>
@@ -198,25 +223,34 @@ export default function SellerPropertyDetailsPage() {
               </Grid>
 
               <Box sx={{ display: 'flex', gap: 2, mt: 3 }}>
-                <Button
-                  variant="outlined"
-                  startIcon={<EditIcon />}
-                  component={RouterLink}
-                  to={`/seller/properties/${propertyId}/edit`}
-                >
-                  Edit
-                </Button>
-                <Button
-                  variant="outlined"
-                  color="error"
-                  startIcon={<DeleteIcon />}
-                  onClick={() => {
-                    setDeleteError(null);
-                    setIsDeleteDialogOpen(true);
-                  }}
-                >
-                  Delete
-                </Button>
+                {!isWithdrawn && (
+                  <Button
+                    variant="outlined"
+                    startIcon={<EditIcon />}
+                    component={RouterLink}
+                    to={`/seller/properties/${propertyId}/edit`}
+                  >
+                    Edit
+                  </Button>
+                )}
+                {!isWithdrawn && (
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    startIcon={<DeleteIcon />}
+                    onClick={() => {
+                      setWithdrawError(null);
+                      setIsWithdrawDialogOpen(true);
+                    }}
+                  >
+                    Withdraw Listing
+                  </Button>
+                )}
+                {isWithdrawn && (
+                  <Typography color="text.secondary">
+                    This listing has been withdrawn and is no longer editable or visible to buyers.
+                  </Typography>
+                )}
               </Box>
             </Paper>
           </Grid>
@@ -289,31 +323,37 @@ export default function SellerPropertyDetailsPage() {
               fraudReport={detail.fraudReport}
             />
           </Grid>
+
+          <Grid size={12}>
+            <SellerDeedVerificationSection propertyId={propertyId} />
+          </Grid>
         </Grid>
       )}
 
-      <Dialog open={isDeleteDialogOpen} onClose={() => setIsDeleteDialogOpen(false)}>
-        <DialogTitle>Delete this property?</DialogTitle>
+      <Dialog open={isWithdrawDialogOpen} onClose={() => setIsWithdrawDialogOpen(false)}>
+        <DialogTitle>Withdraw this listing?</DialogTitle>
         <DialogContent>
-          <DialogContentText>This permanently removes the listing and cannot be undone.</DialogContentText>
-          {deleteError && (
+          <DialogContentText>
+            This removes the property from active review/browsing but keeps its verification and audit history.
+          </DialogContentText>
+          {withdrawError && (
             <Alert severity="error" sx={{ mt: 2 }}>
-              {deleteError}
+              {withdrawError}
             </Alert>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setIsDeleteDialogOpen(false)} disabled={isDeleting}>
+          <Button onClick={() => setIsWithdrawDialogOpen(false)} disabled={isWithdrawing}>
             Cancel
           </Button>
           <Button
             color="error"
             variant="contained"
-            onClick={() => void handleConfirmDelete()}
-            disabled={isDeleting}
-            startIcon={isDeleting ? <CircularProgress size={16} color="inherit" /> : undefined}
+            onClick={() => void handleConfirmWithdraw()}
+            disabled={isWithdrawing}
+            startIcon={isWithdrawing ? <CircularProgress size={16} color="inherit" /> : undefined}
           >
-            Delete
+            Withdraw Listing
           </Button>
         </DialogActions>
       </Dialog>

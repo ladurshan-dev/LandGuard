@@ -435,6 +435,18 @@ BEGIN
         RETURN -1;
     END
 
+    -- Phase F (Property Withdrawal): a Withdrawn listing is not reachable
+    -- through the normal edit flow, because this procedure unconditionally
+    -- resets Status back to 'Pending' below - without this guard, editing a
+    -- withdrawn listing would silently "revive" it back into the active
+    -- moderation workflow. There is no "Relist" action yet; that is a
+    -- deliberate, separate future decision, not implemented here.
+    IF EXISTS (SELECT 1 FROM dbo.Property WHERE PropertyID = @PropertyID AND Status = 'Withdrawn')
+    BEGIN
+        RAISERROR (N'This listing has been withdrawn and cannot be edited. Relisting is not currently supported.', 16, 1);
+        RETURN -2;
+    END
+
     UPDATE dbo.Property
     SET Title         = ISNULL(@Title,         Title),
         Description   = ISNULL(@Description,   Description),
@@ -456,8 +468,111 @@ END;
 GO
 
 /*------------------------------------------------------------------------------
+  usp_Property_Withdraw   ->  POST /api/properties/{id}/withdraw
+  Phase F (Property Withdrawal / Soft Delete). Seller-initiated "Delete" no
+  longer attempts a physical DELETE FROM dbo.Property (see usp_Property_Delete's
+  own header note below) - it withdraws the listing instead: Status is set to
+  'Withdrawn' and every child/audit record (DeedVerification, FraudCheck,
+  RiskReport, AdminAction, Notification, PropertyImage) is left completely
+  untouched. This is a listing lifecycle change, not a fraud verdict and not a
+  deletion - the database row remains for auditability, and any Government
+  Deed Verification / legacy fraud engine results attached to it stay valid.
+
+  Seller-owned only (no Admin path here - Admin's hard-delete/cleanup
+  procedure, usp_Property_Delete, is unchanged and kept separate).
+
+  Allowed source states: Pending, Approved. A Flagged property is still
+  mid-review (the seller should wait for/respond to that outcome first); a
+  Rejected property already has a terminal admin decision; a Withdrawn
+  property is already withdrawn. Each disallowed transition gets its own
+  clear RAISERROR rather than a silent no-op, matching this procedure's
+  neighbours (usp_Property_Update/usp_Property_Delete above).
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE dbo.usp_Property_Withdraw
+    @PropertyID INT,
+    @SellerID   INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @CurrentStatus VARCHAR(20), @Title NVARCHAR(200);
+    SELECT @CurrentStatus = Status, @Title = Title
+    FROM dbo.Property
+    WHERE PropertyID = @PropertyID AND SellerID = @SellerID;
+
+    IF @CurrentStatus IS NULL
+    BEGIN
+        RAISERROR (N'Property not found, or it does not belong to this seller.', 16, 1);
+        RETURN -1;
+    END
+
+    IF @CurrentStatus = 'Withdrawn'
+    BEGIN
+        RAISERROR (N'This listing has already been withdrawn.', 16, 1);
+        RETURN -2;
+    END
+
+    IF @CurrentStatus = 'Flagged'
+    BEGIN
+        RAISERROR (N'This listing is currently under fraud review and cannot be withdrawn yet. Please wait for the review to complete.', 16, 1);
+        RETURN -3;
+    END
+
+    IF @CurrentStatus = 'Rejected'
+    BEGIN
+        RAISERROR (N'This listing was already rejected by an administrator and does not need to be withdrawn.', 16, 1);
+        RETURN -4;
+    END
+
+    -- Only Pending and Approved reach here.
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        UPDATE dbo.Property SET Status = 'Withdrawn' WHERE PropertyID = @PropertyID;
+
+        INSERT INTO dbo.Notification (UserID, Message, RelatedPropertyID)
+        VALUES (@SellerID,
+                N'Your listing "' + @Title + N'" has been withdrawn and is no longer visible to buyers. Its verification and audit history has been preserved.',
+                @PropertyID);
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
+    SELECT * FROM dbo.vw_PropertyListing WHERE PropertyID = @PropertyID;
+    RETURN 0;
+END;
+GO
+
+/*------------------------------------------------------------------------------
   usp_Property_Delete   ->  DELETE /api/properties/{id}
   Cascades to images, fraud checks, risk reports, saved items and reports.
+
+  BUG FIX NOTE (seller delete silently/confusingly failing): Module5B
+  (database/Module5B_DeedVerification.sql) added dbo.DeedVerification with
+  FK_DeedVerification_Property ON DELETE NO ACTION - deliberately, per
+  that script's own header comment: "Verification history is audit/history
+  data; a property deletion must never silently cascade-delete the
+  evidence of what was verified about it." DeedVerification.PropertyID is
+  also NOT NULL (unlike AdminAction.PropertyID/Notification.RelatedPropertyID,
+  which this procedure already detaches by setting them NULL below), so
+  the same "null out the FK" trick cannot apply here without contradicting
+  that column's own design. Before this fix, attempting DELETE FROM
+  dbo.Property for any property with at least one persisted deed
+  verification raised an unhandled FK-constraint SqlException (error 547)
+  that surfaced as a confusing raw SQL error - the delete never happened
+  and nothing about the failure was clear to the seller.
+  This fix does NOT delete, orphan, or cascade-delete any DeedVerification/
+  DeedVerificationField/DeedVerificationReason row - that audit trail is
+  fully preserved. It only turns the previously-confusing FK violation
+  into the same clear, friendly RAISERROR pattern already used for the
+  ownership check immediately above it. A property with recorded deed
+  verification history is therefore not deletable through this procedure
+  at all yet (by Seller OR Admin) until a deliberate retention/soft-delete
+  decision is made - see the chat report this fix shipped with.
 ------------------------------------------------------------------------------*/
 CREATE OR ALTER PROCEDURE dbo.usp_Property_Delete
     @PropertyID INT,
@@ -477,6 +592,12 @@ BEGIN
     BEGIN
         RAISERROR (N'Not authorised to delete this property.', 16, 1);
         RETURN -1;
+    END
+
+    IF EXISTS (SELECT 1 FROM dbo.DeedVerification WHERE PropertyID = @PropertyID)
+    BEGIN
+        RAISERROR (N'This property has a recorded Government Deed Verification and cannot be permanently deleted. Contact an administrator if this listing needs to be removed.', 16, 1);
+        RETURN -2;
     END
 
     -- AdminAction rows reference the property with NO ACTION, so detach them first
@@ -655,13 +776,34 @@ BEGIN
     /*--------------------------------------------------------------------------
       CHECK 7 - MISSING INFORMATION
       Fires when any mandatory listing detail is absent or too thin.
+
+      PHASE E NOTE (Supporting Risk Indicator Refactor): "deed present" no
+      longer means only Property.DeedReference (an optional free-text
+      field a seller may leave blank even after genuinely uploading and
+      verifying a deed - see PropertyFormPage/DeedVerificationController).
+      dbo.DeedVerification.SellerDocumentReference is the actual uploaded-
+      document persistence Government Deed Verification writes once OCR +
+      comparison + classification succeed for this property (Phase D) - a
+      row with a non-null SellerDocumentReference here means a real deed
+      document exists for this property, regardless of whether the
+      optional DeedReference text was ever filled in. Deed presence is
+      therefore now EITHER signal, not just the text field; an empty
+      DeedReference alone must not fire this rule when a seller deed
+      document has actually been uploaded and verified. Property.DeedReference
+      itself is unchanged and remains optional - this only changes how its
+      absence is interpreted here.
     --------------------------------------------------------------------------*/
     DECLARE @ImageCount INT =
             (SELECT COUNT(*) FROM dbo.PropertyImage WHERE PropertyID = @PropertyID);
     DECLARE @SellerPhone VARCHAR(20) =
             (SELECT Phone FROM dbo.Users WHERE UserID = @SellerID);
+    DECLARE @HasSellerDeedDocument BIT =
+            CASE WHEN EXISTS (
+                SELECT 1 FROM dbo.DeedVerification
+                WHERE PropertyID = @PropertyID AND SellerDocumentReference IS NOT NULL
+            ) THEN 1 ELSE 0 END;
 
-    IF @DeedReference IS NULL
+    IF (@DeedReference IS NULL AND @HasSellerDeedDocument = 0)
        OR @Description IS NULL OR LEN(LTRIM(RTRIM(@Description))) < 30
        OR @ImageCount = 0
        OR @District IS NULL OR LTRIM(RTRIM(@District)) = ''
@@ -799,11 +941,17 @@ BEGIN
     INNER JOIN dbo.FraudRuleWeight AS w ON w.RuleCode = x.RuleCode
     WHERE fc.FraudCheckID = @FraudCheckID AND x.Triggered = 1;
 
+    -- PHASE E NOTE: wording only (no logic/weight/threshold change) - these
+    -- are supporting LISTING RISK indicators, not a deed-authenticity
+    -- verdict, so the stored summary/notification text avoids "fraud"/
+    -- "fraudulent" language that could be misread as one. Government Deed
+    -- Verification (Application layer, C#) remains the authoritative deed
+    -- comparison; this procedure never claims to be that.
     DECLARE @Summary NVARCHAR(MAX) =
         N'Risk score ' + CAST(@RiskScore AS NVARCHAR(10)) + N'/100 (' + @RiskLevel + N' risk). ' +
         CASE WHEN @Reasons IS NULL OR LEN(@Reasons) = 0
-             THEN N'All 7 fraud detection rules passed. No fraud indicators were found.'
-             ELSE N'The following fraud indicators were detected:' + CHAR(13) + CHAR(10) + @Reasons
+             THEN N'All 7 listing risk checks passed. No risk indicators were found.'
+             ELSE N'The following listing risk indicators were detected:' + CHAR(13) + CHAR(10) + @Reasons
         END;
 
     BEGIN TRY
@@ -829,7 +977,7 @@ BEGIN
 
         INSERT INTO dbo.Notification (UserID, Message, RelatedPropertyID)
         VALUES (@SellerID,
-                N'Fraud analysis complete for "' + @Title + N'". Risk: ' + @RiskLevel +
+                N'Risk analysis completed for "' + @Title + N'". Listing risk level: ' + @RiskLevel +
                 N' (' + CAST(@RiskScore AS NVARCHAR(10)) + N'/100). Your listing is pending admin review.',
                 @PropertyID);
 
@@ -837,8 +985,8 @@ BEGIN
         IF @RiskLevel = 'High'
             INSERT INTO dbo.Notification (UserID, Message, RelatedPropertyID)
             SELECT UserID,
-                   N'HIGH RISK listing submitted: "' + @Title + N'" scored ' +
-                   CAST(@RiskScore AS NVARCHAR(10)) + N'/100. Review required.',
+                   N'Potential listing concerns detected: "' + @Title + N'" scored ' +
+                   CAST(@RiskScore AS NVARCHAR(10)) + N'/100 (High risk band). Review may be required.',
                    @PropertyID
             FROM dbo.Users WHERE Role = 'Admin' AND IsActive = 1;
 
@@ -1026,13 +1174,24 @@ BEGIN
         RETURN -1;
     END
 
-    DECLARE @SellerID INT, @Title NVARCHAR(200);
-    SELECT @SellerID = SellerID, @Title = Title FROM dbo.Property WHERE PropertyID = @PropertyID;
+    DECLARE @SellerID INT, @Title NVARCHAR(200), @CurrentStatus VARCHAR(20);
+    SELECT @SellerID = SellerID, @Title = Title, @CurrentStatus = Status
+    FROM dbo.Property WHERE PropertyID = @PropertyID;
 
     IF @SellerID IS NULL
     BEGIN
         RAISERROR (N'Property not found.', 16, 1);
         RETURN -2;
+    END
+
+    -- Phase F (Property Withdrawal): a Withdrawn listing has left the
+    -- active moderation workflow by the seller's own choice - normal
+    -- Approve/Reject moderation must not resurrect it. Pending properties
+    -- are unaffected by this check.
+    IF @CurrentStatus = 'Withdrawn'
+    BEGIN
+        RAISERROR (N'This listing has been withdrawn by the seller and is no longer part of the active review queue.', 16, 1);
+        RETURN -3;
     END
 
     BEGIN TRY
@@ -1077,13 +1236,23 @@ BEGIN
         RETURN -1;
     END
 
-    DECLARE @SellerID INT, @Title NVARCHAR(200);
-    SELECT @SellerID = SellerID, @Title = Title FROM dbo.Property WHERE PropertyID = @PropertyID;
+    DECLARE @SellerID INT, @Title NVARCHAR(200), @CurrentStatus VARCHAR(20);
+    SELECT @SellerID = SellerID, @Title = Title, @CurrentStatus = Status
+    FROM dbo.Property WHERE PropertyID = @PropertyID;
 
     IF @SellerID IS NULL
     BEGIN
         RAISERROR (N'Property not found.', 16, 1);
         RETURN -2;
+    END
+
+    -- Phase F (Property Withdrawal): see the identical guard in
+    -- usp_Admin_ApproveProperty above - a Withdrawn listing must not be
+    -- moderated through the normal Approve/Reject flow.
+    IF @CurrentStatus = 'Withdrawn'
+    BEGIN
+        RAISERROR (N'This listing has been withdrawn by the seller and is no longer part of the active review queue.', 16, 1);
+        RETURN -3;
     END
 
     BEGIN TRY

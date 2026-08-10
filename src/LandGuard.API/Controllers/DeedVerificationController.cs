@@ -85,4 +85,28 @@ public class DeedVerificationController : ControllerBase
             ? Ok(DeedVerificationResponse.FromOutcome(result.Data!))
             : BadRequest(new { errors = result.Errors });
     }
+
+    /// <summary>
+    /// GET /api/deed-verification/{propertyId} - Seller (own properties
+    /// only) or Admin. Reads every already-persisted verification run for
+    /// <paramref name="propertyId"/> (newest first), without running a new
+    /// one - the read counterpart to <see cref="Verify"/> above (Phase D:
+    /// lets the Seller Property Details and Admin Review pages display a
+    /// verification that already ran, instead of only ever showing a
+    /// session-only result from the action above).
+    /// </summary>
+    [HttpGet("{propertyId:int}")]
+    [Authorize(Policy = AuthorizationPolicies.RequireSellerOrAdmin)]
+    public async Task<IActionResult> GetHistory(int propertyId, CancellationToken cancellationToken)
+    {
+        var callerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _governmentDeedVerificationService.GetHistoryAsync(
+            propertyId, callerId, _currentUserService.Role, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data!.Select(DeedVerificationResponse.FromHistoryEntry).ToList())
+            : BadRequest(new { errors = result.Errors });
+    }
 }

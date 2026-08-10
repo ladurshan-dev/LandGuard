@@ -200,7 +200,13 @@ public class GovernmentDeedFraudDetectionService : IGovernmentDeedFraudDetection
         // report.Fields itself is empty (see GovernmentDeedComparisonReport.Fields'
         // own doc comment) - passed through unchanged, never recomputed.
         Evidence = report.Fields,
-        GeneratedDate = report.GeneratedDate
+        GeneratedDate = report.GeneratedDate,
+        // Passed through unchanged regardless of status - this is the one
+        // shared factory every classification branch already funnels
+        // through, so this line does not touch any classification rule
+        // above (Classify/ClassifyMissingOrCancelled/ClassifyMismatch/
+        // MaterialFieldReasons are all unmodified).
+        SellerDocumentReference = report.SellerDocumentReference
     };
 
     /// <summary>

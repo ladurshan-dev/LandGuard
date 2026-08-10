@@ -248,4 +248,25 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
 
         return rowsDeleted;
     }
+
+    public async Task<PropertyListingResult> WithdrawAsync(int propertyId, int sellerId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { PropertyID = propertyId, SellerID = sellerId };
+
+        // Unlike UpdateAsync, usp_Property_Withdraw does not call
+        // usp_Fraud_AnalyseProperty (withdrawal is a lifecycle change, not
+        // a fraud re-check), so it only ever produces the one final
+        // "SELECT * FROM dbo.vw_PropertyListing" result set -
+        // QuerySingleOrDefaultAsync reads it directly, no QueryMultipleAsync
+        // discard-dance needed here. If sellerId doesn't own propertyId, or
+        // the property is in a state that cannot be withdrawn (Flagged,
+        // Rejected, already Withdrawn), the procedure RAISERRORs before
+        // reaching that SELECT - Dapper surfaces that as a SqlException,
+        // deliberately left uncaught here (see IPropertyStoredProcedures.
+        // WithdrawAsync's doc comment).
+        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+            "dbo.usp_Property_Withdraw", parameters, cancellationToken);
+
+        return listing!;
+    }
 }
