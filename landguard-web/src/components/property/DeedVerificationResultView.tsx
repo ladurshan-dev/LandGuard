@@ -21,6 +21,7 @@ const STATUS_COLOR: Record<DeedVerificationStatus, ChipProps['color']> = {
   PriceAnomaly: 'warning',
   Unverified: 'default',
   UnverifiedCancelled: 'default',
+  FormMismatch: 'error',
 };
 
 const STATUS_LABEL: Record<DeedVerificationStatus, string> = {
@@ -29,6 +30,7 @@ const STATUS_LABEL: Record<DeedVerificationStatus, string> = {
   PriceAnomaly: 'Price anomaly',
   Unverified: 'Unverified - no matching government record',
   UnverifiedCancelled: 'Unverified - government record cancelled',
+  FormMismatch: 'Listing information does not match the uploaded deed',
 };
 
 interface DeedVerificationResultViewProps {

@@ -18,12 +18,9 @@ import { useAuth } from '../../../hooks/useAuth';
 import { PropertyCard } from '../../../components/property/PropertyCard';
 import { searchProperties } from '../../../services/propertyService';
 import { ApiError } from '../../../utils/apiError';
-import type { PropertySearchRequest, PropertySearchResponse, PropertySortOption, RiskLevel } from '../../../types/property';
+import type { PropertySearchRequest, PropertySearchResponse, PropertySortOption } from '../../../types/property';
 
 const PAGE_SIZE = 12;
-
-/** Empty-string sentinel for the "no filter" option of the district-free-text/riskLevel selects, since MUI Select can't bind directly to `undefined`. */
-const ANY_RISK_LEVEL = '';
 
 interface FilterFormState {
   keyword: string;
@@ -32,7 +29,6 @@ interface FilterFormState {
   maxPrice: string;
   minSize: string;
   maxSize: string;
-  riskLevel: RiskLevel | typeof ANY_RISK_LEVEL;
   sortBy: PropertySortOption;
 }
 
@@ -43,7 +39,6 @@ const EMPTY_FILTERS: FilterFormState = {
   maxPrice: '',
   minSize: '',
   maxSize: '',
-  riskLevel: ANY_RISK_LEVEL,
   sortBy: 'Newest',
 };
 
@@ -55,7 +50,14 @@ function toSearchRequest(filters: FilterFormState, pageNumber: number): Property
     maxPrice: filters.maxPrice.trim() === '' ? undefined : Number(filters.maxPrice),
     minSize: filters.minSize.trim() === '' ? undefined : Number(filters.minSize),
     maxSize: filters.maxSize.trim() === '' ? undefined : Number(filters.maxSize),
-    riskLevel: filters.riskLevel === ANY_RISK_LEVEL ? undefined : filters.riskLevel,
+    // No riskLevel here on purpose - Buyer privacy requirement. Even
+    // filtering by the internal risk band (without ever seeing a raw
+    // score) would let a Buyer indirectly reconstruct which Approved
+    // listings the fraud engine flagged as higher risk. The backend now
+    // also force-ignores this field for any non-Admin caller regardless
+    // (see PropertyService.SearchAsync), so this is redundant-but-honest
+    // on the request shape rather than silently relying on the backend
+    // alone.
     sortBy: filters.sortBy,
     pageNumber,
     pageSize: PAGE_SIZE,
@@ -69,6 +71,12 @@ function toSearchRequest(filters: FilterFormState, pageNumber: number): Property
  * endpoint, so this page never needs to filter by status itself - doing
  * so would just be duplicating (and risking disagreeing with) a decision
  * the backend has already made.
+ *
+ * Buyer privacy requirement: this page has no Risk Level filter and no
+ * "Risk: Low to High" sort - both would surface internal fraud-engine
+ * categorization to a Buyer, which must never happen even for Approved
+ * listings. AdminPropertiesPage keeps its own, separate filter form with
+ * both, since an Admin caller is exempt from the backend's redaction.
  */
 export default function BrowsePropertiesPage() {
   const { user } = useAuth();
@@ -214,23 +222,6 @@ export default function BrowsePropertiesPage() {
             <Grid size={{ xs: 6, sm: 4, md: 2 }}>
               <TextField
                 select
-                label="Risk Level"
-                fullWidth
-                size="small"
-                value={formValues.riskLevel}
-                onChange={(event) =>
-                  setFormValues((prev) => ({ ...prev, riskLevel: event.target.value as FilterFormState['riskLevel'] }))
-                }
-              >
-                <MenuItem value={ANY_RISK_LEVEL}>Any</MenuItem>
-                <MenuItem value="Low">Low</MenuItem>
-                <MenuItem value="Medium">Medium</MenuItem>
-                <MenuItem value="High">High</MenuItem>
-              </TextField>
-            </Grid>
-            <Grid size={{ xs: 6, sm: 4, md: 2 }}>
-              <TextField
-                select
                 label="Sort By"
                 fullWidth
                 size="small"
@@ -240,9 +231,9 @@ export default function BrowsePropertiesPage() {
                 }
               >
                 <MenuItem value="Newest">Newest</MenuItem>
+                <MenuItem value="Oldest">Oldest</MenuItem>
                 <MenuItem value="PriceAsc">Price: Low to High</MenuItem>
                 <MenuItem value="PriceDesc">Price: High to Low</MenuItem>
-                <MenuItem value="RiskAsc">Risk: Low to High</MenuItem>
               </TextField>
             </Grid>
             <Grid size={{ xs: 12, sm: 4, md: 2 }} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

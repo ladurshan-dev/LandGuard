@@ -35,7 +35,10 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         decimal? longitude,
         double size,
         decimal price,
-        string? deedReference,
+        string deedReference,
+        string ownerName,
+        string ownerNic,
+        string ownerAddress,
         CancellationToken cancellationToken = default)
     {
         // usp_Property_Create has an OUTPUT parameter (@NewPropertyID), the
@@ -51,6 +54,9 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         parameters.Add("@Size", size);
         parameters.Add("@Price", price);
         parameters.Add("@DeedReference", deedReference);
+        parameters.Add("@OwnerName", ownerName);
+        parameters.Add("@OwnerNIC", ownerNic);
+        parameters.Add("@OwnerAddress", ownerAddress);
         parameters.Add("@NewPropertyID", dbType: DbType.Int32, direction: ParameterDirection.Output);
 
         // BUG FIX (PropertyID = 0 on create): usp_Property_Create's own
@@ -189,6 +195,9 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         double? size,
         decimal? price,
         string? deedReference,
+        string? ownerName,
+        string? ownerNic,
+        string? ownerAddress,
         CancellationToken cancellationToken = default)
     {
         var parameters = new
@@ -203,7 +212,10 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
             Longitude = longitude,
             Size = size,
             Price = price,
-            DeedReference = deedReference
+            DeedReference = deedReference,
+            OwnerName = ownerName,
+            OwnerNIC = ownerNic,
+            OwnerAddress = ownerAddress
         };
 
         // If sellerId doesn't own propertyId, the procedure RAISERRORs
@@ -283,5 +295,66 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         // that as a SqlException here, deliberately left uncaught (see
         // IPropertyStoredProcedures.DeleteImageAsync's doc comment).
         await _executor.ExecuteAsync("dbo.usp_PropertyImage_Delete", parameters, cancellationToken);
+    }
+
+    public async Task<(PropertyListingResult Listing, string EffectiveVerificationStatus)> ApplyDeedVerificationOutcomeAsync(
+        int propertyId, string verificationStatus, string? summary, string? governmentPropertyReference = null, CancellationToken cancellationToken = default)
+    {
+        // AUDIT-CONSISTENCY FIX (post-review, third pass): DynamicParameters
+        // is needed now (the plain anonymous-object parameters this method
+        // used before were sufficient when every parameter was input-only)
+        // because usp_Property_ApplyDeedVerificationOutcome gained an
+        // @EffectiveVerificationStatus OUTPUT parameter - the same reason
+        // usp_Property_Create/usp_User_Register need DynamicParameters for
+        // their own OUTPUT parameters elsewhere in this class/UserStoredProcedures.
+        var parameters = new DynamicParameters();
+        parameters.Add("@PropertyID", propertyId);
+        parameters.Add("@VerificationStatus", verificationStatus);
+        parameters.Add("@Summary", summary);
+        parameters.Add("@GovernmentPropertyReference", governmentPropertyReference);
+        parameters.Add("@EffectiveVerificationStatus", dbType: DbType.String, size: 30, direction: ParameterDirection.Output);
+
+        // usp_Property_ApplyDeedVerificationOutcome does not call
+        // usp_Fraud_AnalyseProperty (it only writes Property.Status plus a
+        // Notification row), so - like WithdrawAsync - it only ever
+        // produces the one final "SELECT * FROM dbo.vw_PropertyListing"
+        // result set; no QueryMultipleAsync discard-dance needed here. A
+        // Withdrawn property or an unrecognised verificationStatus
+        // RAISERRORs before reaching that SELECT - Dapper surfaces that as
+        // a SqlException, deliberately left uncaught (see
+        // IPropertyStoredProcedures.ApplyDeedVerificationOutcomeAsync's own
+        // doc comment).
+        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+            "dbo.usp_Property_ApplyDeedVerificationOutcome", parameters, cancellationToken);
+
+        var effectiveVerificationStatus = parameters.Get<string?>("@EffectiveVerificationStatus") ?? verificationStatus;
+
+        return (listing!, effectiveVerificationStatus);
+    }
+
+    public async Task MarkPendingForReverificationAsync(int propertyId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { PropertyID = propertyId };
+
+        // usp_Property_MarkPendingForReverification has no result set to
+        // read (it only conditionally UPDATEs/INSERTs) - ExecuteAsync is
+        // the same no-result-set path DeleteImageAsync above already uses
+        // for this shape.
+        await _executor.ExecuteAsync("dbo.usp_Property_MarkPendingForReverification", parameters, cancellationToken);
+    }
+
+    public async Task<int?> FindPropertyIdByGovernmentPropertyReferenceAsync(
+        string governmentPropertyReference, int excludePropertyId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new
+        {
+            GovernmentPropertyReference = governmentPropertyReference,
+            ExcludePropertyID = excludePropertyId
+        };
+
+       // Use nullable int so a zero-row result is returned as null,
+// while an actual matching PropertyID is returned as its real value.
+        return await _executor.QuerySingleOrDefaultAsync<int?>(
+            "dbo.usp_Property_FindByGovernmentPropertyReference", parameters, cancellationToken);
     }
 }

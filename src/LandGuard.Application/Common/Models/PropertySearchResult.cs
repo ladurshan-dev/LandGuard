@@ -33,6 +33,15 @@ public class PropertySearchResult
 
     public string? DeedReference { get; set; }
 
+    /// <summary>Null for a Buyer/public caller - see PropertyListingResult.OwnerNic's doc comment (the same redaction applies here via PropertyService.SearchAsync).</summary>
+    public string? OwnerName { get; set; }
+
+    /// <summary>Sensitive PII: null for a Buyer/public caller - see PropertyListingResult.OwnerNic's doc comment.</summary>
+    public string? OwnerNic { get; set; }
+
+    /// <summary>Null for a Buyer/public caller - see PropertyListingResult.OwnerNic's doc comment.</summary>
+    public string? OwnerAddress { get; set; }
+
     public string Status { get; set; } = null!;
 
     public DateTime UploadDate { get; set; }
@@ -45,11 +54,19 @@ public class PropertySearchResult
 
     public bool SellerNicVerified { get; set; }
 
+    /// <summary>
+    /// Null for a Buyer/anonymous/public caller - Buyer privacy
+    /// requirement: fraud-engine output is internal, never exposed to the
+    /// marketplace, even for an Approved listing. Non-null only for an
+    /// Admin caller (see PropertyService.SearchAsync's redaction logic).
+    /// </summary>
     public int? RiskScore { get; set; }
 
-    public string RiskLevel { get; set; } = null!;
+    /// <summary>Null for a Buyer/public caller - see RiskScore's doc comment.</summary>
+    public string? RiskLevel { get; set; }
 
-    public string FraudStatus { get; set; } = null!;
+    /// <summary>Null for a Buyer/public caller - see RiskScore's doc comment.</summary>
+    public string? FraudStatus { get; set; }
 
     public string? RiskSummary { get; set; }
 

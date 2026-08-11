@@ -40,4 +40,14 @@ public interface IUserStoredProcedures
 
     /// <summary>Wraps usp_User_ChangePassword (Module 3). Returns the number of rows updated (0 or 1).</summary>
     Task<int> ChangePasswordAsync(int userId, string newPasswordHash, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_User_SetIdentityStatus (Seller Government Identity
+    /// Verification requirement) - the only write path for
+    /// dbo.Users.IdentityStatus. Called exclusively by
+    /// SellerIdentityVerificationService. Throws (SqlException, RAISERROR)
+    /// for a non-Seller userId - see that procedure's own header comment.
+    /// </summary>
+    /// <param name="identityStatus">LandGuard.Domain.Enums.IdentityStatus's exact string name - "Pending" | "Verified" | "Failed".</param>
+    Task SetIdentityStatusAsync(int userId, string identityStatus, CancellationToken cancellationToken = default);
 }

@@ -149,6 +149,14 @@ public class DeedVerificationResponse
         DeedFraudReason.GovernmentRecordNotFound => "No matching government registry record could be found for this property.",
         DeedFraudReason.GovernmentRecordCancelled => "The government registry record is cancelled, so the deed could not be verified against an active record. This does not by itself mean the deed is fraudulent.",
         DeedFraudReason.GovernmentDocumentUnavailable => "The government registry record is active, but its trusted document could not be retrieved for comparison.",
+        DeedFraudReason.FormSellerNicMismatch => "Seller NIC does not match the uploaded deed.",
+        DeedFraudReason.FormOwnerNameMismatch => "Owner name does not match the uploaded deed.",
+        DeedFraudReason.FormDeedNumberMismatch => "Deed number does not match the uploaded deed.",
+        DeedFraudReason.FormLocationMismatch => "Location does not match the uploaded deed.",
+        DeedFraudReason.FormDistrictMismatch => "District does not match the uploaded deed.",
+        DeedFraudReason.FormLandSizeMismatch => "Land extent does not match the uploaded deed.",
+        DeedFraudReason.FormOwnerNicMismatch => "Owner NIC does not match the uploaded deed.",
+        DeedFraudReason.FormOwnerAddressMismatch => "Owner address does not match the uploaded deed.",
         _ => reason.ToString()
     };
 }

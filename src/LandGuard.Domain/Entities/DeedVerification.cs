@@ -47,7 +47,7 @@ public class DeedVerification
     /// <summary>"Active" | "Cancelled" | "Suspended" | null, copied from <c>GovernmentLandRecordDto.Status</c> at the moment of this run.</summary>
     public string? GovernmentRecordStatus { get; set; }
 
-    /// <summary>Stored as its exact string name (Verified/Fraudulent/PriceAnomaly/Unverified/UnverifiedCancelled) - see DeedVerificationConfiguration for the enum conversion.</summary>
+    /// <summary>Stored as its exact string name (Verified/Fraudulent/PriceAnomaly/Unverified/UnverifiedCancelled/FormMismatch) - see DeedVerificationConfiguration for the enum conversion.</summary>
     public DeedVerificationStatus VerificationStatus { get; set; }
 
     public string? Summary { get; set; }

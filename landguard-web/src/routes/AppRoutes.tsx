@@ -4,6 +4,7 @@ import { FullScreenLoader } from '../components/FullScreenLoader';
 import { useAuth } from '../hooks/useAuth';
 import { DASHBOARD_PATH_BY_ROLE } from '../types/auth';
 import LoginPage from '../pages/auth/LoginPage';
+import RegisterPage from '../pages/auth/RegisterPage';
 import SellerDashboard from '../pages/seller/SellerDashboard';
 import BuyerDashboard from '../pages/buyer/BuyerDashboard';
 import AdminDashboard from '../pages/admin/AdminDashboard';
@@ -50,6 +51,7 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<RootRedirect />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
 
       <Route
         path="/seller/dashboard"

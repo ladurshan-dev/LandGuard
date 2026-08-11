@@ -141,11 +141,21 @@ public class FraudDetectionService : IFraudDetectionService
         return Result<FraudHistoryResponse>.Success(response);
     }
 
+    // RiskLevel/FraudStatus are only ever null on a PropertyListingResult
+    // when PropertyService redacted them for a non-owner, non-Admin
+    // (Buyer) caller - see PropertyListingResult.RiskLevel's doc comment.
+    // Every caller of BuildRiskSummary is now gated to Seller-owner-or-
+    // Admin (FraudController's GetReport/GetHistory actions require
+    // AuthorizationPolicies.RequireSellerOrAdmin - see that controller's
+    // doc comment for the Buyer-privacy change this fallback accompanies),
+    // so in practice these are never actually null here; the fallback only
+    // guards the type, the same defensive pattern BuildHistoryEntry already
+    // uses below for RiskLevel.
     private static RiskSummaryResponse BuildRiskSummary(PropertyListingResult listing) => new()
     {
         RiskScore = listing.RiskScore ?? 0,
-        RiskLevel = listing.RiskLevel,
-        FraudStatus = listing.FraudStatus,
+        RiskLevel = listing.RiskLevel ?? "Low",
+        FraudStatus = listing.FraudStatus ?? "Clean",
         Summary = listing.RiskSummary,
         GeneratedDate = listing.RiskGeneratedDate
     };

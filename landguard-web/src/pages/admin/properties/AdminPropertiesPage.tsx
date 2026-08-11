@@ -283,7 +283,14 @@ export default function AdminPropertiesPage() {
                     </Typography>
 
                     <Box sx={{ mt: 1 }}>
-                      <RiskIndicator riskLevel={listing.riskLevel} fraudStatus={listing.fraudStatus} riskScore={listing.riskScore} />
+                      {/*
+                        Non-null assertions: riskLevel/fraudStatus are only
+                        ever null when the backend redacted them for a
+                        non-Admin caller - see PropertyListingResult.
+                        riskScore's doc comment. This page is Admin-only, so
+                        this caller is always an Admin - never redacted.
+                      */}
+                      <RiskIndicator riskLevel={listing.riskLevel!} fraudStatus={listing.fraudStatus!} riskScore={listing.riskScore} />
                     </Box>
 
                     <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 0.5, mt: 1.5 }}>

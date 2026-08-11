@@ -23,7 +23,7 @@ public class DeedVerificationRecord
 
     public string? GovernmentRecordStatus { get; set; }
 
-    /// <summary>"Verified" | "Fraudulent" | "PriceAnomaly" | "Unverified" | "UnverifiedCancelled" - DeedVerificationStatus's exact string name.</summary>
+    /// <summary>"Verified" | "Fraudulent" | "PriceAnomaly" | "Unverified" | "UnverifiedCancelled" | "FormMismatch" - DeedVerificationStatus's exact string name.</summary>
     public string VerificationStatus { get; set; } = null!;
 
     public string? Summary { get; set; }

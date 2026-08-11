@@ -43,6 +43,9 @@ public class User
     /// <summary>[ext] FR02 - manual seller identity verification status.</summary>
     public bool NicVerified { get; set; }
 
+    /// <summary>Seller Government Identity Verification requirement - raw DB value ("Pending"|"Verified"|"Failed"), null for a Buyer/Admin. See LandGuard.Domain.Enums.IdentityStatus's own doc comment for why this is distinct from <see cref="NicVerified"/>.</summary>
+    public string? IdentityStatus { get; set; }
+
     // Navigation properties -------------------------------------------------
 
     /// <summary>Listings this user has submitted as a Seller.</summary>

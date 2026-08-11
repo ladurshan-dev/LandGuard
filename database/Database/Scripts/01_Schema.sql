@@ -61,6 +61,19 @@ CREATE TABLE dbo.Users
     CreatedAt       DATETIME2(0)                    NOT NULL,
     IsActive        BIT                             NOT NULL,
     NICVerified     BIT                             NOT NULL,   -- [extension] FR02
+    -- [extension] Seller Government Identity Verification requirement.
+    -- Pending/Verified/Failed - distinct from NICVerified (a plain BIT,
+    -- which cannot represent three states, hence this column existing at
+    -- all). Adding this column does not itself touch any NICVerified value -
+    -- but the two are NOT independent at write time: usp_User_SetIdentityStatus
+    -- (the sole writer of this column) and usp_Admin_VerifyNIC (the manual
+    -- Admin path) both keep NICVerified in lockstep in the same UPDATE, so
+    -- Verified/Pending/Failed here always agrees with NICVerified = 1/0/0 -
+    -- see either procedure's own comment. NULL for Buyer/Admin - an
+    -- identity check only ever applies to a Seller. See the idempotent
+    -- upgrade block below for how an already-existing database's Seller
+    -- rows are backfilled from their own NICVerified value.
+    IdentityStatus  VARCHAR(20)                         NULL,
 
     CONSTRAINT PK_Users              PRIMARY KEY CLUSTERED (UserID),
     CONSTRAINT UQ_Users_Email        UNIQUE (Email),
@@ -78,13 +91,46 @@ CREATE TABLE dbo.Users
         OR NIC LIKE '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
     ),
     -- A Seller must always supply a NIC (FR02)
-    CONSTRAINT CK_Users_Seller_NIC   CHECK (Role <> 'Seller' OR NIC IS NOT NULL)
+    CONSTRAINT CK_Users_Seller_NIC   CHECK (Role <> 'Seller' OR NIC IS NOT NULL),
+    CONSTRAINT CK_Users_IdentityStatus CHECK (IdentityStatus IS NULL OR IdentityStatus IN ('Pending','Verified','Failed'))
 );
 GO
 
 ALTER TABLE dbo.Users ADD CONSTRAINT DF_Users_CreatedAt   DEFAULT (SYSDATETIME()) FOR CreatedAt;
 ALTER TABLE dbo.Users ADD CONSTRAINT DF_Users_IsActive    DEFAULT (1)             FOR IsActive;
 ALTER TABLE dbo.Users ADD CONSTRAINT DF_Users_NICVerified DEFAULT (0)             FOR NICVerified;
+GO
+
+/*------------------------------------------------------------------------------
+  Idempotent upgrade for an ALREADY-EXISTING LandGuardDB (Seller Government
+  Identity Verification requirement). Column + CHECK constraint added only if
+  missing (COL_LENGTH / sys.check_constraints existence checks, the same
+  pattern every other upgrade block in this script uses) - a no-op on a
+  brand-new database (the base CREATE TABLE above already includes both).
+  Backfills existing Seller rows ONLY, from their own existing NICVerified
+  value (1 -> 'Verified', 0 -> 'Pending' - never 'Failed': there is no actual
+  name/NIC mismatch evidence for a pre-existing row, and inventing one would
+  contradict the "a technical/no-evidence condition must never be treated as
+  a failure" principle applied elsewhere in this system). Buyer/Admin rows are
+  left NULL. Guarded by "WHERE IdentityStatus IS NULL" so re-running this
+  block after it has already backfilled a database is a no-op.
+------------------------------------------------------------------------------*/
+IF COL_LENGTH('dbo.Users', 'IdentityStatus') IS NULL
+BEGIN
+    ALTER TABLE dbo.Users ADD IdentityStatus VARCHAR(20) NULL;
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.check_constraints WHERE name = 'CK_Users_IdentityStatus')
+BEGIN
+    ALTER TABLE dbo.Users ADD CONSTRAINT CK_Users_IdentityStatus
+        CHECK (IdentityStatus IS NULL OR IdentityStatus IN ('Pending','Verified','Failed'));
+END
+GO
+
+UPDATE dbo.Users
+SET IdentityStatus = CASE WHEN NICVerified = 1 THEN 'Verified' ELSE 'Pending' END
+WHERE Role = 'Seller' AND IdentityStatus IS NULL;
 GO
 
 
@@ -134,6 +180,28 @@ CREATE TABLE dbo.Property
     Size            FLOAT                           NOT NULL,   -- land size in perches
     Price           DECIMAL(14,2)                   NOT NULL,
     DeedReference   VARCHAR(100)                        NULL,
+    -- Explicit deed-owner fields (Owner Name / Owner NIC / Owner Address
+    -- requirement). Nullable at the schema level - deliberately NOT a
+    -- NOT NULL/CHECK constraint, so an idempotent ALTER TABLE ADD on an
+    -- already-existing LandGuardDB never needs to fabricate a value for
+    -- rows created before this requirement existed (see the idempotent
+    -- upgrade block below for the full reasoning). "Mandatory" for every
+    -- NEW listing is enforced instead at the Application layer
+    -- (CreatePropertyRequestValidator) and inside usp_Property_Create
+    -- itself (RAISERROR guard, the same defence-in-depth style
+    -- usp_Property_Create already uses for "Seller not found").
+    OwnerName       NVARCHAR(150)                       NULL,
+    OwnerNIC        VARCHAR(20)                         NULL,
+    OwnerAddress    NVARCHAR(255)                       NULL,
+    -- [extension] Global Duplicate-Property Prevention requirement. The
+    -- authoritative GovernmentLandRecordDto.PropertyReference this
+    -- PropertyID last resolved to during Government Registry verification -
+    -- NULL until a verification run actually resolves one. Used only to
+    -- detect a second PropertyID resolving to the same government parcel
+    -- (usp_Property_FindByGovernmentPropertyReference); never displayed to
+    -- a Buyer, never used as the deed-duplicate identifier itself (that
+    -- remains DeedReference - see usp_Property_Create's own header comment).
+    GovernmentPropertyReference NVARCHAR(50)            NULL,
     Status          VARCHAR(20)                     NOT NULL,
     UploadDate      DATETIME2(0)                    NOT NULL,
 
@@ -143,7 +211,7 @@ CREATE TABLE dbo.Property
     CONSTRAINT PK_Property            PRIMARY KEY CLUSTERED (PropertyID),
     CONSTRAINT FK_Property_Seller     FOREIGN KEY (SellerID)
         REFERENCES dbo.Users (UserID) ON DELETE NO ACTION ON UPDATE NO ACTION,
-    CONSTRAINT CK_Property_Status     CHECK (Status IN ('Pending','Approved','Flagged','Rejected','Withdrawn')),
+    CONSTRAINT CK_Property_Status     CHECK (Status IN ('Pending','Approved','Flagged','Rejected','Withdrawn','Disapproved')),
     CONSTRAINT CK_Property_Price      CHECK (Price > 0),
     CONSTRAINT CK_Property_Size       CHECK (Size > 0)
 );
@@ -172,6 +240,68 @@ BEGIN
     ALTER TABLE dbo.Property DROP CONSTRAINT CK_Property_Status;
     ALTER TABLE dbo.Property ADD CONSTRAINT CK_Property_Status
         CHECK (Status IN ('Pending','Approved','Flagged','Rejected','Withdrawn'));
+END
+GO
+
+/*------------------------------------------------------------------------------
+  Idempotent upgrade for an ALREADY-EXISTING LandGuardDB (Mandatory Deed /
+  Form-vs-Deed Verification requirement). Adds 'Disapproved' - a SYSTEM-
+  AUTOMATED outcome (Form-vs-Deed mismatch, or any Government Registry
+  mismatch other than a standalone price anomaly), distinct from 'Rejected'
+  (which stays exactly what its own PropertyStatus.cs doc comment already
+  says: a manual Admin decision). Same guarded DROP/ADD pattern as the
+  'Withdrawn' upgrade above - a no-op on a brand-new database (the base
+  CREATE TABLE above already includes 'Disapproved'), an actual upgrade on
+  an existing one, safe to re-run any number of times.
+------------------------------------------------------------------------------*/
+IF EXISTS (
+    SELECT 1 FROM sys.check_constraints
+    WHERE name = 'CK_Property_Status'
+      AND OBJECT_DEFINITION(OBJECT_ID) NOT LIKE '%Disapproved%'
+)
+BEGIN
+    ALTER TABLE dbo.Property DROP CONSTRAINT CK_Property_Status;
+    ALTER TABLE dbo.Property ADD CONSTRAINT CK_Property_Status
+        CHECK (Status IN ('Pending','Approved','Flagged','Rejected','Withdrawn','Disapproved'));
+END
+GO
+
+/*------------------------------------------------------------------------------
+  Idempotent upgrade for an ALREADY-EXISTING LandGuardDB (Owner Name / Owner
+  NIC / Owner Address requirement). Each column is added only if missing -
+  COL_LENGTH(...) IS NULL is the standard idempotent-column-add check, the
+  same role OBJECT_DEFINITION(...) NOT LIKE '...' plays for the CHECK
+  constraint upgrades above. No default/backfill value, so this never writes
+  to any existing Property row - old rows simply have NULL here (accurate:
+  they never captured this data), exactly like every other pre-existing
+  optional column. Safe to re-run any number of times.
+------------------------------------------------------------------------------*/
+IF COL_LENGTH('dbo.Property', 'OwnerName') IS NULL
+BEGIN
+    ALTER TABLE dbo.Property ADD OwnerName NVARCHAR(150) NULL;
+END
+GO
+
+IF COL_LENGTH('dbo.Property', 'OwnerNIC') IS NULL
+BEGIN
+    ALTER TABLE dbo.Property ADD OwnerNIC VARCHAR(20) NULL;
+END
+GO
+
+IF COL_LENGTH('dbo.Property', 'OwnerAddress') IS NULL
+BEGIN
+    ALTER TABLE dbo.Property ADD OwnerAddress NVARCHAR(255) NULL;
+END
+GO
+
+/*------------------------------------------------------------------------------
+  Idempotent upgrade for an ALREADY-EXISTING LandGuardDB (Global
+  Duplicate-Property Prevention requirement). No default/backfill - a
+  verification run is what populates this, never a migration.
+------------------------------------------------------------------------------*/
+IF COL_LENGTH('dbo.Property', 'GovernmentPropertyReference') IS NULL
+BEGIN
+    ALTER TABLE dbo.Property ADD GovernmentPropertyReference NVARCHAR(50) NULL;
 END
 GO
 

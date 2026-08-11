@@ -40,7 +40,7 @@ public class PropertyController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> Search([FromQuery] PropertySearchRequest request, CancellationToken cancellationToken)
     {
-        var result = await _propertyService.SearchAsync(request, cancellationToken);
+        var result = await _propertyService.SearchAsync(request, _currentUserService.Role, cancellationToken);
 
         return result.Succeeded
             ? Ok(result.Data)
@@ -213,5 +213,32 @@ public class PropertyController : ControllerBase
         return result.Succeeded
             ? Ok(result.Data)
             : BadRequest(new { errors = result.Errors });
+    }
+
+    /// <summary>
+    /// GET /api/properties/{id}/seller-contact - Contact Seller workflow.
+    /// Buyer-only (RequireBuyer - deliberately excludes Seller/Admin, who
+    /// have no legitimate need for this Buyer-facing endpoint; a Seller
+    /// caller gets the standard 403 the policy already produces). Returns
+    /// the smallest possible DTO (SellerName/Phone/Email/VerifiedSeller -
+    /// see <see cref="SellerContactInfo"/>) and only once the property is
+    /// currently "Approved" - enforced server-side inside
+    /// <see cref="IPropertyService.GetSellerContactAsync"/>, never trusted
+    /// from the frontend. A Pending/Flagged/Rejected/Disapproved/Withdrawn
+    /// property, or a nonexistent one, both 404 with the same generic
+    /// message, so this endpoint cannot be used to probe a listing's status.
+    /// </summary>
+    [HttpGet("{id:int}/seller-contact")]
+    [Authorize(Policy = AuthorizationPolicies.RequireBuyer)]
+    public async Task<IActionResult> GetSellerContact(int id, CancellationToken cancellationToken)
+    {
+        var buyerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _propertyService.GetSellerContactAsync(id, buyerId, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : NotFound(new { errors = result.Errors });
     }
 }

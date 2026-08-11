@@ -222,6 +222,32 @@ export default function SellerPropertyDetailsPage() {
                 </Grid>
               </Grid>
 
+              {/*
+                Owner Name / Owner NIC / Owner Address requirement - the
+                explicit deed-owner fields FormDeedComparer now checks
+                against the uploaded deed. Only ever null here for a
+                non-owner/non-Admin caller (see PropertyListingResult.ownerNic's
+                doc comment) - this page only ever loads the signed-in
+                seller's own property, so never redacted.
+              */}
+              <Grid container spacing={2} sx={{ mt: 1, pt: 2, borderTop: 1, borderColor: 'divider' }}>
+                <Grid size={12}>
+                  <Typography variant="subtitle2" color="text.secondary">Deed Owner Details</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <Typography variant="caption" color="text.secondary">Owner Name</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>{detail.listing.ownerName ?? '-'}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <Typography variant="caption" color="text.secondary">Owner NIC</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>{detail.listing.ownerNic ?? '-'}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <Typography variant="caption" color="text.secondary">Owner Address</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>{detail.listing.ownerAddress ?? '-'}</Typography>
+                </Grid>
+              </Grid>
+
               <Box sx={{ display: 'flex', gap: 2, mt: 3 }}>
                 {!isWithdrawn && (
                   <Button
@@ -314,9 +340,16 @@ export default function SellerPropertyDetailsPage() {
           </Grid>
 
           <Grid size={12}>
+            {/*
+              Non-null assertions: riskLevel/fraudStatus are only ever null
+              when the backend redacted them for a non-owner, non-Admin
+              (Buyer) caller - see PropertyListingResult.riskScore's doc
+              comment. This page only ever loads the signed-in seller's own
+              property, so this caller is always the owner - never redacted.
+            */}
             <PropertyFraudPanel
-              riskLevel={detail.listing.riskLevel}
-              fraudStatus={detail.listing.fraudStatus}
+              riskLevel={detail.listing.riskLevel!}
+              fraudStatus={detail.listing.fraudStatus!}
               riskScore={detail.listing.riskScore}
               riskSummary={detail.listing.riskSummary}
               riskGeneratedDate={detail.listing.riskGeneratedDate}
@@ -325,7 +358,18 @@ export default function SellerPropertyDetailsPage() {
           </Grid>
 
           <Grid size={12}>
-            <SellerDeedVerificationSection propertyId={propertyId} />
+            {/*
+              onVerified reuses the same loadDetail this page already calls
+              on mount - no new fetch logic, just re-invoking it after a
+              verify/re-verify POST succeeds so the status chip and
+              deedReference/description fields above pick up whatever
+              Property.Status the backend just transitioned to
+              (Approved/Pending/Disapproved) without requiring a manual
+              reload. A quiet background refresh, same as
+              handleDeleteImage/handleUpload above - no full-page loading
+              spinner takeover for it.
+            */}
+            <SellerDeedVerificationSection propertyId={propertyId} onVerified={() => loadDetail(propertyId)} />
           </Grid>
         </Grid>
       )}

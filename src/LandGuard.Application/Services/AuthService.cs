@@ -21,8 +21,10 @@ public class AuthService : IAuthService
     private readonly IUserStoredProcedures _userStoredProcedures;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IJwtTokenGenerator _tokenGenerator;
+    private readonly ISellerIdentityVerificationService _sellerIdentityVerificationService;
     private readonly IValidator<BuyerRegisterRequest> _buyerRegisterValidator;
     private readonly IValidator<SellerRegisterRequest> _sellerRegisterValidator;
+    private readonly IValidator<RegisterRequest> _registerValidator;
     private readonly IValidator<LoginRequest> _loginValidator;
     private readonly IValidator<ChangePasswordRequest> _changePasswordValidator;
 
@@ -30,16 +32,20 @@ public class AuthService : IAuthService
         IUserStoredProcedures userStoredProcedures,
         IPasswordHasher passwordHasher,
         IJwtTokenGenerator tokenGenerator,
+        ISellerIdentityVerificationService sellerIdentityVerificationService,
         IValidator<BuyerRegisterRequest> buyerRegisterValidator,
         IValidator<SellerRegisterRequest> sellerRegisterValidator,
+        IValidator<RegisterRequest> registerValidator,
         IValidator<LoginRequest> loginValidator,
         IValidator<ChangePasswordRequest> changePasswordValidator)
     {
         _userStoredProcedures = userStoredProcedures;
         _passwordHasher = passwordHasher;
         _tokenGenerator = tokenGenerator;
+        _sellerIdentityVerificationService = sellerIdentityVerificationService;
         _buyerRegisterValidator = buyerRegisterValidator;
         _sellerRegisterValidator = sellerRegisterValidator;
+        _registerValidator = registerValidator;
         _loginValidator = loginValidator;
         _changePasswordValidator = changePasswordValidator;
     }
@@ -69,7 +75,65 @@ public class AuthService : IAuthService
         var profile = await _userStoredProcedures.RegisterAsync(
             request.Name, request.Email, passwordHash, UserRole.Seller, request.Nic, request.Phone, cancellationToken);
 
-        return Result<AuthResponse>.Success(BuildAuthResponse(profile));
+        // Seller Government Identity Verification requirement: registration
+        // itself succeeds first (the row above is already committed) - the
+        // identity check is a separate step afterwards, per this
+        // requirement's own "Account Created -> Government Identity
+        // Registry -> Verified/Pending/Failed" flow. Never blocks/fails
+        // registration itself: VerifyAsync never throws (a technical
+        // registry failure is caught internally and classified as
+        // Pending), so an identity-registry outage cannot prevent a Seller
+        // from getting an account. profile.IdentityStatus is refreshed by
+        // re-reading it below rather than trusted from the stale `profile`
+        // captured before this call.
+        await _sellerIdentityVerificationService.VerifyAsync(profile.UserId, cancellationToken);
+        var refreshedProfile = await _userStoredProcedures.GetByIdAsync(profile.UserId, cancellationToken) ?? profile;
+
+        return Result<AuthResponse>.Success(BuildAuthResponse(refreshedProfile));
+    }
+
+    /// <summary>
+    /// POST /api/auth/register. RegisterRequestValidator has already
+    /// guaranteed <see cref="RegisterRequest.Role"/> is exactly "Buyer" or
+    /// "Seller" by the time ValidateAndThrowAsync returns below - a
+    /// caller-supplied "Admin" (or anything else) fails validation and
+    /// never reaches the switch, so there is no branch here that could
+    /// register an Admin account. The two branches build the exact same
+    /// BuyerRegisterRequest/SellerRegisterRequest RegisterBuyerAsync/
+    /// RegisterSellerAsync already accept, and call those methods directly
+    /// - password hashing, the usp_User_Register call and JWT issuance via
+    /// BuildAuthResponse are reused verbatim, not duplicated.
+    /// </summary>
+    public async Task<Result<AuthResponse>> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
+    {
+        await _registerValidator.ValidateAndThrowAsync(request, cancellationToken);
+
+        return request.Role switch
+        {
+            "Seller" => await RegisterSellerAsync(
+                new SellerRegisterRequest
+                {
+                    Name = request.FullName,
+                    Email = request.Email,
+                    Password = request.Password,
+                    Nic = request.Nic!,
+                    Phone = request.Phone
+                },
+                cancellationToken),
+            "Buyer" => await RegisterBuyerAsync(
+                new BuyerRegisterRequest
+                {
+                    Name = request.FullName,
+                    Email = request.Email,
+                    Password = request.Password,
+                    Nic = request.Nic,
+                    Phone = request.Phone
+                },
+                cancellationToken),
+            // Unreachable given RegisterRequestValidator's whitelist rule -
+            // kept as defense in depth rather than an unchecked exception.
+            _ => Result<AuthResponse>.Failure("Role must be Buyer or Seller.")
+        };
     }
 
     public async Task<Result<AuthResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -140,6 +204,36 @@ public class AuthService : IAuthService
         await _userStoredProcedures.ChangePasswordAsync(userId, newHash, cancellationToken);
 
         return Result.Success();
+    }
+
+    /// <summary>
+    /// POST /api/auth/identity/reverify. callerId always comes from the
+    /// caller's own JWT (ICurrentUserService) - never an arbitrary UserID
+    /// from the request body, so a Seller can only ever reverify their own
+    /// identity. Allowed for a Pending OR a Failed Seller: this project
+    /// implements no profile-editing capability (no way for a Seller to
+    /// correct their own stored Name/NIC through this or any other
+    /// endpoint - see this method's own note below), so a Failed retry
+    /// re-runs the exact same deterministic comparison against the same
+    /// stored Name/NIC and will reach the same Failed verdict again unless
+    /// the underlying registry record itself changes - which is exactly
+    /// the safe, non-insecure behaviour this requirement asks for ("may
+    /// retry if the current design allows a corrected identity
+    /// record/profile workflow safely" - allowing the retry call itself,
+    /// with no new editing surface, satisfies that without inventing one).
+    /// </summary>
+    public async Task<Result<UserProfile>> ReverifyIdentityAsync(int callerId, CancellationToken cancellationToken = default)
+    {
+        var profile = await _userStoredProcedures.GetByIdAsync(callerId, cancellationToken);
+        if (profile is null || !string.Equals(profile.Role, "Seller", StringComparison.Ordinal))
+        {
+            return Result<UserProfile>.Failure("Only a Seller account has a Government Identity status to reverify.");
+        }
+
+        await _sellerIdentityVerificationService.VerifyAsync(callerId, cancellationToken);
+        var refreshedProfile = await _userStoredProcedures.GetByIdAsync(callerId, cancellationToken) ?? profile;
+
+        return Result<UserProfile>.Success(refreshedProfile);
     }
 
     private AuthResponse BuildAuthResponse(UserProfile profile)

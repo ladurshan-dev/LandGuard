@@ -214,6 +214,31 @@ export default function AdminPropertyDetailsPage() {
                 </Grid>
               </Grid>
 
+              {/*
+                Owner Name / Owner NIC / Owner Address requirement - the
+                explicit deed-owner fields FormDeedComparer checks against
+                the uploaded deed. Only ever null for a non-owner/non-Admin
+                caller (see PropertyListingResult.ownerNic's doc comment) -
+                this page is Admin-only, so never redacted.
+              */}
+              <Grid container spacing={2} sx={{ mt: 1, pt: 2, borderTop: 1, borderColor: 'divider' }}>
+                <Grid size={12}>
+                  <Typography variant="subtitle2" color="text.secondary">Deed Owner Details</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <Typography variant="caption" color="text.secondary">Owner Name</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>{detail.listing.ownerName ?? '-'}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <Typography variant="caption" color="text.secondary">Owner NIC</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>{detail.listing.ownerNic ?? '-'}</Typography>
+                </Grid>
+                <Grid size={{ xs: 12, sm: 4 }}>
+                  <Typography variant="caption" color="text.secondary">Owner Address</Typography>
+                  <Typography variant="body1" sx={{ fontWeight: 600 }}>{detail.listing.ownerAddress ?? '-'}</Typography>
+                </Grid>
+              </Grid>
+
               <Box sx={{ mt: 2, pt: 2, borderTop: 1, borderColor: 'divider' }}>
                 <Typography variant="overline" color="text.secondary">
                   B. Seller Information
@@ -260,9 +285,16 @@ export default function AdminPropertyDetailsPage() {
               C. Supporting Risk Indicators
             </Typography>
             <Box sx={{ mt: 0.5 }}>
+              {/*
+                Non-null assertions: riskLevel/fraudStatus are only ever
+                null when the backend redacted them for a non-owner,
+                non-Admin (Buyer) caller - see PropertyListingResult.
+                riskScore's doc comment. This page is Admin-only, so this
+                caller is always an Admin - never redacted.
+              */}
               <PropertyFraudPanel
-                riskLevel={detail.listing.riskLevel}
-                fraudStatus={detail.listing.fraudStatus}
+                riskLevel={detail.listing.riskLevel!}
+                fraudStatus={detail.listing.fraudStatus!}
                 riskScore={detail.listing.riskScore}
                 riskSummary={detail.listing.riskSummary}
                 riskGeneratedDate={detail.listing.riskGeneratedDate}

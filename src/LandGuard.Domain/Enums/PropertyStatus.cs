@@ -36,5 +36,29 @@ public enum PropertyStatus
     /// the normal edit flow (usp_Property_Update refuses to touch a
     /// Withdrawn property) - there is no "Relist" action yet.
     /// </summary>
-    Withdrawn = 5
+    Withdrawn = 5,
+
+    /// <summary>
+    /// SYSTEM-AUTOMATED outcome of the Mandatory Deed / Form-vs-Deed
+    /// Verification requirement - reached automatically by
+    /// <c>usp_Property_ApplyDeedVerificationOutcome</c> when
+    /// GovernmentDeedFraudDetectionService.Classify produces
+    /// <c>DeedVerificationStatus.FormMismatch</c> (the seller-entered
+    /// listing fields do not match their own uploaded deed) or
+    /// <c>DeedVerificationStatus.Fraudulent</c> (the uploaded deed does not
+    /// match the trusted Government Registry record). Deliberately a
+    /// distinct value from <see cref="Rejected"/>, which stays exactly what
+    /// it already meant - a manual Admin decision, with its own
+    /// AdminAction row and "reviewed and rejected by an administrator"
+    /// notification wording, neither of which would be true for this
+    /// automated case. Never sent to the normal Admin price-anomaly review
+    /// queue (vw_FlaggedProperty's own WHERE clause only ever matches
+    /// 'Flagged'/'Pending'), never visible to a Buyer (vw_PublishedProperty/
+    /// usp_Property_Search only ever return 'Approved'). The Seller may
+    /// still edit the listing - usp_Property_Update resets any edit to
+    /// 'Pending' unconditionally (the same reset every other non-Withdrawn
+    /// status already goes through), which is how a corrected listing
+    /// re-enters verification rather than remaining stuck.
+    /// </summary>
+    Disapproved = 6
 }

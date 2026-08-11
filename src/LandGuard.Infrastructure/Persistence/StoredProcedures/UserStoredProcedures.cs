@@ -79,4 +79,15 @@ public class UserStoredProcedures : IUserStoredProcedures
 
         return rowsUpdated;
     }
+
+    public async Task SetIdentityStatusAsync(int userId, string identityStatus, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { UserID = userId, IdentityStatus = identityStatus };
+
+        // usp_User_SetIdentityStatus's own final SELECT (the updated row) is
+        // not needed by any current caller - SellerIdentityVerificationService
+        // already has the status it just persisted.
+        await _executor.QuerySingleOrDefaultAsync<UserProfile>(
+            "dbo.usp_User_SetIdentityStatus", parameters, cancellationToken);
+    }
 }

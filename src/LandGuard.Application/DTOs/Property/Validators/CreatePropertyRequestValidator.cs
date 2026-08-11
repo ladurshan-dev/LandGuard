@@ -1,4 +1,5 @@
 using FluentValidation;
+using LandGuard.Application.DTOs.Auth.Validators;
 
 namespace LandGuard.Application.DTOs.Property.Validators;
 
@@ -38,7 +39,24 @@ public class CreatePropertyRequestValidator : AbstractValidator<CreatePropertyRe
         RuleFor(x => x.Price)
             .GreaterThan(0); // CK_Property_Price
 
+        // Owner Name / Owner NIC / Owner Address / Deed Number requirement:
+        // all four mandatory for every new listing - a Property with no
+        // deed, or a deed with no stated owner, must never be creatable.
         RuleFor(x => x.DeedReference)
+            .NotEmpty()
             .MaximumLength(PropertyValidationRules.DeedReferenceMaxLength);
+
+        RuleFor(x => x.OwnerName)
+            .NotEmpty()
+            .MaximumLength(PropertyValidationRules.OwnerNameMaxLength);
+
+        RuleFor(x => x.OwnerNic)
+            .NotEmpty()
+            .Matches(AuthValidationRules.NicPattern)
+            .WithMessage(AuthValidationRules.NicErrorMessage);
+
+        RuleFor(x => x.OwnerAddress)
+            .NotEmpty()
+            .MaximumLength(PropertyValidationRules.OwnerAddressMaxLength);
     }
 }

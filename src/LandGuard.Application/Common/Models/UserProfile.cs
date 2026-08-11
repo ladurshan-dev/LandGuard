@@ -25,5 +25,8 @@ public class UserProfile
 
     public bool IsActive { get; set; }
 
+    /// <summary>Seller Government Identity Verification requirement - raw database value ("Pending"|"Verified"|"Failed"), null for a Buyer/Admin.</summary>
+    public string? IdentityStatus { get; set; }
+
     public DateTime CreatedAt { get; set; }
 }

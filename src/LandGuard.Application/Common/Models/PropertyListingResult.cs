@@ -38,6 +38,27 @@ public class PropertyListingResult
 
     public string? DeedReference { get; set; }
 
+    /// <summary>
+    /// The deed's registered owner name (explicit deed-owner data - see
+    /// LandGuard.Domain.Entities.Property.OwnerName's own doc comment for
+    /// why this is no longer substituted with the Seller account's Name).
+    /// Null whenever the caller is neither this listing's owner nor an
+    /// Admin - see OwnerNic's doc comment.
+    /// </summary>
+    public string? OwnerName { get; set; }
+
+    /// <summary>
+    /// The deed's registered owner NIC. Sensitive PII: null for a
+    /// Buyer/anonymous/public caller viewing someone else's Approved
+    /// listing, exactly like RiskScore - see PropertyService.
+    /// RedactOwnerFields, the one place this is actually enforced.
+    /// Non-null only for the owning Seller or an Admin.
+    /// </summary>
+    public string? OwnerNic { get; set; }
+
+    /// <summary>The deed's registered owner address. Null for a Buyer/public caller - see OwnerNic's doc comment.</summary>
+    public string? OwnerAddress { get; set; }
+
     /// <summary>"Pending" | "Approved" | "Flagged" | "Rejected".</summary>
     public string Status { get; set; } = null!;
 
@@ -51,13 +72,21 @@ public class PropertyListingResult
 
     public bool SellerNicVerified { get; set; }
 
+    /// <summary>
+    /// Null for a Buyer/anonymous/public caller viewing someone else's
+    /// Approved listing - Buyer privacy requirement: fraud-engine output is
+    /// internal, never exposed to the marketplace, even once a listing is
+    /// Approved. Non-null only for the owning Seller or an Admin (see
+    /// PropertyService.SearchAsync/GetByIdAsync's redaction logic, the one
+    /// place this is actually enforced).
+    /// </summary>
     public int? RiskScore { get; set; }
 
-    /// <summary>"Low" | "Medium" | "High" - "Low" until the engine has run at least once.</summary>
-    public string RiskLevel { get; set; } = null!;
+    /// <summary>"Low" | "Medium" | "High" - "Low" until the engine has run at least once. Null for a Buyer/public caller - see RiskScore's doc comment.</summary>
+    public string? RiskLevel { get; set; }
 
-    /// <summary>"Clean" | "Suspicious" | "Fraudulent" - "Clean" until the engine has run at least once.</summary>
-    public string FraudStatus { get; set; } = null!;
+    /// <summary>"Clean" | "Suspicious" | "Fraudulent" - "Clean" until the engine has run at least once. Null for a Buyer/public caller - see RiskScore's doc comment.</summary>
+    public string? FraudStatus { get; set; }
 
     public string? RiskSummary { get; set; }
 

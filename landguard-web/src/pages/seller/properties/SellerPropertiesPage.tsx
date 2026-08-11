@@ -24,6 +24,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { Link as RouterLink } from 'react-router-dom';
 import { DashboardLayout } from '../../../layouts/DashboardLayout';
 import { useAuth } from '../../../hooks/useAuth';
+import { SellerIdentityStatusBanner } from '../../../components/seller/SellerIdentityStatusBanner';
 import { PropertyStatusChip } from '../../../components/property/PropertyStatusChip';
 import { RiskIndicator } from '../../../components/property/RiskIndicator';
 import { getPropertiesBySeller, withdrawProperty } from '../../../services/propertyService';
@@ -86,6 +87,13 @@ export default function SellerPropertiesPage() {
     return null;
   }
 
+  // Seller Government Identity Verification requirement: server-side is
+  // the real enforcement (PropertyService.CreateAsync/usp_Property_Create
+  // both reject it independently of this) - disabling here is purely so a
+  // Pending/Failed Seller sees why, via SellerIdentityStatusBanner, rather
+  // than a confusing failed submit after filling out the whole form.
+  const canListProperty = user.identityStatus === 'Verified';
+
   const handleConfirmWithdraw = async () => {
     if (pendingWithdrawId === null) {
       return;
@@ -112,6 +120,7 @@ export default function SellerPropertiesPage() {
 
   return (
     <DashboardLayout title="My Properties" user={user} maxWidth="lg">
+      <SellerIdentityStatusBanner />
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" component="h1">
           My Properties
@@ -121,6 +130,7 @@ export default function SellerPropertiesPage() {
           startIcon={<AddIcon />}
           component={RouterLink}
           to="/seller/properties/new"
+          disabled={!canListProperty}
         >
           List a Property
         </Button>
@@ -144,6 +154,7 @@ export default function SellerPropertiesPage() {
             startIcon={<AddIcon />}
             component={RouterLink}
             to="/seller/properties/new"
+            disabled={!canListProperty}
             sx={{ mt: 2 }}
           >
             List your first property
@@ -174,9 +185,17 @@ export default function SellerPropertiesPage() {
                   </Typography>
 
                   <Box sx={{ mt: 1 }}>
+                    {/*
+                      Non-null assertions: riskLevel/fraudStatus are only
+                      ever null when the backend redacted them for a
+                      non-owner, non-Admin (Buyer) caller - see
+                      PropertyListingResult.riskScore's doc comment. This
+                      grid is GetBySellerAsync, always the signed-in
+                      seller's own listings - never redacted.
+                    */}
                     <RiskIndicator
-                      riskLevel={listing.riskLevel}
-                      fraudStatus={listing.fraudStatus}
+                      riskLevel={listing.riskLevel!}
+                      fraudStatus={listing.fraudStatus!}
                       riskScore={listing.riskScore}
                     />
                   </Box>

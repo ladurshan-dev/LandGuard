@@ -170,8 +170,53 @@ CREATE OR ALTER PROCEDURE dbo.usp_User_GetById
 AS
 BEGIN
     SET NOCOUNT ON;
-    SELECT UserID, Name, Email, Role, NIC, Phone, NICVerified, IsActive, CreatedAt
+    SELECT UserID, Name, Email, Role, NIC, Phone, NICVerified, IsActive, IdentityStatus, CreatedAt
     FROM dbo.Users WHERE UserID = @UserID;
+END;
+GO
+
+/*------------------------------------------------------------------------------
+  usp_User_SetIdentityStatus   ->  Seller Government Identity Verification
+  requirement. The only procedure that writes dbo.Users.IdentityStatus -
+  called by Application layer's SellerIdentityVerificationService right
+  after a Seller registers, and again from the Seller-authenticated
+  identity/reverify endpoint. RAISERRORs for a non-Seller, the same
+  defence-in-depth style usp_Property_Create's Owner-field guard uses.
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE dbo.usp_User_SetIdentityStatus
+    @UserID         INT,
+    @IdentityStatus VARCHAR(20)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF @IdentityStatus NOT IN ('Pending', 'Verified', 'Failed')
+    BEGIN
+        RAISERROR (N'Invalid identity status. Allowed values: Pending, Verified, Failed.', 16, 1);
+        RETURN -1;
+    END
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.Users WHERE UserID = @UserID AND Role = 'Seller')
+    BEGIN
+        RAISERROR (N'Identity status only applies to a Seller account.', 16, 1);
+        RETURN -2;
+    END
+
+    -- Kept in lockstep with the legacy NICVerified BIT so the two can never
+    -- contradict each other - NICVerified still feeds CHECK 3 of
+    -- usp_Fraud_AnalyseProperty and is projected to the frontend as the
+    -- Buyer/Admin-facing "(NIC verified)" badge (SellerNicVerified on
+    -- PropertyListingResult/PropertySearchResult). Verified -> 1,
+    -- Pending/Failed -> 0.
+    UPDATE dbo.Users
+    SET IdentityStatus = @IdentityStatus,
+        NICVerified = CASE WHEN @IdentityStatus = 'Verified' THEN 1 ELSE 0 END
+    WHERE UserID = @UserID;
+
+    SELECT UserID, Name, Email, Role, NIC, Phone, NICVerified, IsActive, IdentityStatus, CreatedAt
+    FROM dbo.Users WHERE UserID = @UserID;
+
+    RETURN 0;
 END;
 GO
 
@@ -195,7 +240,10 @@ CREATE OR ALTER PROCEDURE dbo.usp_Property_Create
     @Longitude      DECIMAL(9,6)    = NULL,
     @Size           FLOAT,
     @Price          DECIMAL(14,2),
-    @DeedReference  VARCHAR(100)    = NULL,
+    @DeedReference  VARCHAR(100),
+    @OwnerName      NVARCHAR(150),
+    @OwnerNIC       VARCHAR(20),
+    @OwnerAddress   NVARCHAR(255),
     @NewPropertyID  INT             = NULL OUTPUT
 AS
 BEGIN
@@ -208,15 +256,68 @@ BEGIN
         RETURN -1;
     END
 
+    -- Seller Government Identity Verification requirement: defence-in-depth
+    -- backing up PropertyService.CreateAsync's own check (which runs first,
+    -- with the exact Seller-facing message this requirement specifies).
+    IF NOT EXISTS (SELECT 1 FROM dbo.Users
+                    WHERE UserID = @SellerID AND IdentityStatus = 'Verified')
+    BEGIN
+        RAISERROR (N'Your identity must be verified before you can list a property.', 16, 1);
+        RETURN -7;
+    END
+
+    -- Owner Name / Owner NIC / Owner Address / Deed Number requirement:
+    -- all four are mandatory for every new listing. CreatePropertyRequestValidator
+    -- already rejects a missing/blank value with a clean 400 before this is
+    -- ever reached, so in normal operation this RAISERROR is a defence-in-
+    -- depth backstop (the same role the Seller-not-found check above
+    -- plays) - not the primary enforcement point.
+    IF LTRIM(RTRIM(ISNULL(@OwnerName, N'')))     = N''
+    OR LTRIM(RTRIM(ISNULL(@OwnerNIC, N'')))      = N''
+    OR LTRIM(RTRIM(ISNULL(@OwnerAddress, N''))) = N''
+    OR LTRIM(RTRIM(ISNULL(@DeedReference, N''))) = N''
+    BEGIN
+        RAISERROR (N'Owner Name, Owner NIC, Owner Address and Deed Number are all required to list a property.', 16, 1);
+        RETURN -2;
+    END
+
+    -- Global Duplicate-Property Prevention requirement: see
+    -- Module7_IdentityAndDuplicateProperty.sql's header comment for why a
+    -- schema-level UNIQUE index is unsafe here (05_SeedData.sql plants 7
+    -- deliberate duplicate-DeedReference pairs to exercise the legacy fraud
+    -- engine's own duplicate-deed rule) and exactly how this
+    -- sp_getapplock-serialized check prevents two concurrent Create calls
+    -- for the same deed from both succeeding.
+    DECLARE @NormalizedDeedReference NVARCHAR(100) = UPPER(LTRIM(RTRIM(@DeedReference)));
+
     BEGIN TRY
         BEGIN TRANSACTION;
 
+        DECLARE @LockResource NVARCHAR(255) = N'Property_DeedReference_' + @NormalizedDeedReference;
+        DECLARE @LockResult INT;
+        EXEC @LockResult = sp_getapplock
+            @Resource = @LockResource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+
+        IF @LockResult < 0
+        BEGIN
+            RAISERROR (N'Could not verify deed uniqueness at this time. Please try again.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN -8;
+        END
+
+        IF EXISTS (SELECT 1 FROM dbo.Property WHERE UPPER(LTRIM(RTRIM(DeedReference))) = @NormalizedDeedReference)
+        BEGIN
+            RAISERROR (N'This property/deed is already listed in LandGuard.', 16, 1);
+            ROLLBACK TRANSACTION;
+            RETURN -9;
+        END
+
         INSERT INTO dbo.Property
             (SellerID, Title, Description, Location, District, Latitude, Longitude,
-             Size, Price, DeedReference, Status)
+             Size, Price, DeedReference, OwnerName, OwnerNIC, OwnerAddress, Status)
         VALUES
             (@SellerID, @Title, @Description, @Location, @District, @Latitude, @Longitude,
-             @Size, @Price, @DeedReference, 'Pending');
+             @Size, @Price, @DeedReference, @OwnerName, @OwnerNIC, @OwnerAddress, 'Pending');
 
         SET @NewPropertyID = SCOPE_IDENTITY();
 
@@ -232,6 +333,210 @@ BEGIN
     EXEC dbo.usp_Fraud_AnalyseProperty @PropertyID = @NewPropertyID;
 
     SELECT * FROM dbo.vw_PropertyListing WHERE PropertyID = @NewPropertyID;
+    RETURN 0;
+END;
+GO
+
+/*------------------------------------------------------------------------------
+  usp_Property_FindByGovernmentPropertyReference   ->  Global
+  Duplicate-Property Prevention requirement. Read-only, privacy-safe lookup:
+  PropertyID only - never SellerID or any Seller PII - so the caller
+  structurally cannot leak another Seller's private details even by
+  accident. Excludes the property currently being verified.
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE dbo.usp_Property_FindByGovernmentPropertyReference
+    @GovernmentPropertyReference NVARCHAR(50),
+    @ExcludePropertyID           INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT TOP (1) PropertyID
+    FROM dbo.Property
+    WHERE GovernmentPropertyReference = @GovernmentPropertyReference
+      AND PropertyID <> @ExcludePropertyID;
+END;
+GO
+
+/*------------------------------------------------------------------------------
+  usp_Property_ApplyDeedVerificationOutcome   ->  called by
+  GovernmentDeedVerificationService.VerifyAndPersistAsync (Mandatory Deed /
+  Form-vs-Deed Verification requirement + Global Duplicate-Property
+  Prevention requirement).
+
+  ADDED TO CANONICAL (post-review): this procedure previously existed only
+  in Module6_PropertyFormVerification.sql / Module7_IdentityAndDuplicateProperty.sql,
+  never in this canonical file - a fresh install built from
+  01_Schema.sql-04_StoredProcedures.sql alone (00_RunAll.sql) would
+  silently be missing it, so any Seller deed-verification attempt against
+  a from-scratch database would fail with an unresolvable stored-procedure
+  error. Safe to add here standalone: this procedure only ever reads/writes
+  dbo.Property and dbo.Notification (both already in this canonical
+  script) plus dbo.vw_PropertyListing (03_Views.sql) - it does NOT touch
+  dbo.DeedVerification or its two child tables at all, so it does not
+  require Module5B's DeedVerication-table schema to exist. This is the
+  FINAL current version - same body as Module7's re-issue, in sync with:
+    Verified            -> Approved
+    PriceAnomaly         -> Pending
+    FormMismatch          -> Disapproved
+    Fraudulent            -> Disapproved
+    Unverified            -> Disapproved
+    UnverifiedCancelled   -> Disapproved
+    DuplicateProperty     -> Disapproved
+  plus GovernmentPropertyReference persistence and the concurrency-safe
+  sp_getapplock-protected duplicate-reference check (see the inline
+  comments below - identical to Module7's own "CONCURRENCY FIX" and
+  "AUDIT-CONSISTENCY FIX" comments, not reproduced in full here to avoid
+  duplicating that explanation; read Module7_IdentityAndDuplicateProperty.sql
+  for the complete reasoning).
+
+  NOTE ON FRESH-INSTALL COMPLETENESS: adding this one procedure does not by
+  itself make 00_RunAll.sql produce a fully-featured fresh database.
+  dbo.DeedVerification/DeedVerificationField/DeedVerificationReason (and
+  their four stored procedures - usp_DeedVerification_Create,
+  usp_DeedVerificationField_Add, usp_DeedVerificationReason_Add,
+  usp_DeedVerification_GetHistory, all defined only in
+  Module5B_DeedVerification.sql) are NOT part of this canonical schema at
+  all - GovernmentDeedVerificationStoredProcedures.PersistAsync would still
+  fail against a fresh 00_RunAll.sql-only database, this procedure's own
+  presence notwithstanding. usp_User_ChangePassword (Module3),
+  usp_Fraud_GetHistory (Module5A) and the Document Comparison procedures
+  (Module5C) are likewise still canonical-only gaps. This was investigated
+  and is reported in full to the person who requested this fix; it was not
+  silently expanded into fixing everything in this one pass.
+------------------------------------------------------------------------------*/
+CREATE OR ALTER PROCEDURE dbo.usp_Property_ApplyDeedVerificationOutcome
+    @PropertyID                    INT,
+    @VerificationStatus            VARCHAR(30),
+    @Summary                        NVARCHAR(500) = NULL,
+    @GovernmentPropertyReference   NVARCHAR(50)   = NULL,
+    @EffectiveVerificationStatus   VARCHAR(30)    = NULL OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SET @EffectiveVerificationStatus = @VerificationStatus;
+
+    DECLARE @CurrentStatus VARCHAR(20), @Title NVARCHAR(200), @SellerID INT;
+    SELECT @CurrentStatus = Status, @Title = Title, @SellerID = SellerID
+    FROM dbo.Property WHERE PropertyID = @PropertyID;
+
+    IF @SellerID IS NULL
+    BEGIN
+        RAISERROR (N'Property not found.', 16, 1);
+        RETURN -1;
+    END
+
+    IF @CurrentStatus = 'Withdrawn'
+    BEGIN
+        RAISERROR (N'This listing has been withdrawn by the seller and cannot be re-verified into a new status.', 16, 1);
+        RETURN -2;
+    END
+
+    DECLARE @NewStatus VARCHAR(20), @Message NVARCHAR(600);
+    DECLARE @PersistReference BIT = 0;
+
+    IF @VerificationStatus = 'Verified'
+    BEGIN
+        SET @NewStatus = 'Approved';
+        SET @Message = N'Your listing "' + @Title + N'" has passed automated deed and Government Registry verification and is now live to buyers.';
+        SET @PersistReference = 1;
+    END
+    ELSE IF @VerificationStatus = 'FormMismatch'
+    BEGIN
+        SET @NewStatus = 'Disapproved';
+        SET @Message = N'Your listing "' + @Title + N'" has been disapproved. ' + ISNULL(@Summary, N'The property information you entered does not match your uploaded deed.');
+    END
+    ELSE IF @VerificationStatus = 'Fraudulent'
+    BEGIN
+        SET @NewStatus = 'Disapproved';
+        SET @Message = N'Your listing "' + @Title + N'" has been disapproved. ' + ISNULL(@Summary, N'The uploaded deed does not match the Government Registry record.');
+    END
+    ELSE IF @VerificationStatus = 'Unverified'
+    BEGIN
+        SET @NewStatus = 'Disapproved';
+        SET @Message = N'Your listing "' + @Title + N'" has been disapproved. ' + ISNULL(@Summary, N'No matching Government Registry record could be found, or the government deed document could not be validated.');
+    END
+    ELSE IF @VerificationStatus = 'UnverifiedCancelled'
+    BEGIN
+        SET @NewStatus = 'Disapproved';
+        SET @Message = N'Your listing "' + @Title + N'" has been disapproved. ' + ISNULL(@Summary, N'The Government Registry record for this property is cancelled.');
+    END
+    ELSE IF @VerificationStatus = 'DuplicateProperty'
+    BEGIN
+        SET @NewStatus = 'Disapproved';
+        SET @Message = N'Listing Disapproved — This property is already registered as another LandGuard listing.';
+    END
+    ELSE IF @VerificationStatus = 'PriceAnomaly'
+    BEGIN
+        SET @NewStatus = 'Pending';
+        SET @Message = N'Your listing "' + @Title + N'" requires manual review before it can be approved. ' + ISNULL(@Summary, N'A price anomaly was detected during deed verification.');
+        SET @PersistReference = 1;
+    END
+    ELSE
+    BEGIN
+        RAISERROR (N'usp_Property_ApplyDeedVerificationOutcome does not handle VerificationStatus ''%s''.', 16, 1, @VerificationStatus);
+        RETURN -3;
+    END
+
+    DECLARE @NormalizedGovRef NVARCHAR(50) = NULL;
+    IF @PersistReference = 1 AND LTRIM(RTRIM(ISNULL(@GovernmentPropertyReference, N''))) <> N''
+        SET @NormalizedGovRef = UPPER(LTRIM(RTRIM(@GovernmentPropertyReference)));
+    ELSE
+        SET @PersistReference = 0;
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        IF @PersistReference = 1
+        BEGIN
+            -- Concurrency-safe duplicate check under sp_getapplock - same
+            -- pattern as usp_Property_Create's DeedReference guard, on a
+            -- distinct lock-resource namespace. See
+            -- Module7_IdentityAndDuplicateProperty.sql's matching
+            -- procedure for the full "CONCURRENCY FIX" explanation.
+            DECLARE @GovRefLockResource NVARCHAR(255) = N'Property_GovRef_' + @NormalizedGovRef;
+            DECLARE @GovRefLockResult INT;
+            EXEC @GovRefLockResult = sp_getapplock
+                @Resource = @GovRefLockResource, @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+
+            IF @GovRefLockResult < 0
+            BEGIN
+                RAISERROR (N'Could not verify government property-reference uniqueness at this time. Please try again.', 16, 1);
+                ROLLBACK TRANSACTION;
+                RETURN -4;
+            END
+
+            IF EXISTS (
+                SELECT 1 FROM dbo.Property
+                WHERE UPPER(LTRIM(RTRIM(GovernmentPropertyReference))) = @NormalizedGovRef
+                  AND PropertyID <> @PropertyID
+            )
+            BEGIN
+                SET @NewStatus = 'Disapproved';
+                SET @Message = N'Listing Disapproved — This property is already registered as another LandGuard listing.';
+                SET @PersistReference = 0;
+                SET @EffectiveVerificationStatus = 'DuplicateProperty';
+            END
+        END
+
+        UPDATE dbo.Property
+        SET Status = @NewStatus,
+            GovernmentPropertyReference =
+                CASE WHEN @PersistReference = 1 THEN @GovernmentPropertyReference ELSE GovernmentPropertyReference END
+        WHERE PropertyID = @PropertyID;
+
+        INSERT INTO dbo.Notification (UserID, Message, RelatedPropertyID)
+        VALUES (@SellerID, @Message, @PropertyID);
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+
+    SELECT * FROM dbo.vw_PropertyListing WHERE PropertyID = @PropertyID;
     RETURN 0;
 END;
 GO
@@ -354,7 +659,7 @@ CREATE OR ALTER PROCEDURE dbo.usp_Property_Search
     @MinSize     FLOAT         = NULL,
     @MaxSize     FLOAT         = NULL,
     @RiskLevel   VARCHAR(20)   = NULL,   -- Low / Medium / High
-    @SortBy      VARCHAR(20)   = 'Newest', -- Newest | PriceAsc | PriceDesc | RiskAsc
+    @SortBy      VARCHAR(20)   = 'Newest', -- Newest | Oldest | PriceAsc | PriceDesc | RiskAsc
     @PageNumber  INT           = 1,
     @PageSize    INT           = 12
 AS
@@ -386,6 +691,7 @@ BEGIN
         CASE WHEN @SortBy = 'PriceAsc'  THEN Price      END ASC,
         CASE WHEN @SortBy = 'PriceDesc' THEN Price      END DESC,
         CASE WHEN @SortBy = 'RiskAsc'   THEN RiskScore  END ASC,
+        CASE WHEN @SortBy = 'Oldest'    THEN PropertyID END ASC,
         CASE WHEN @SortBy = 'Newest'    THEN PropertyID END DESC,
         PropertyID DESC
     OFFSET (@PageNumber - 1) * @PageSize ROWS
@@ -423,7 +729,10 @@ CREATE OR ALTER PROCEDURE dbo.usp_Property_Update
     @Longitude      DECIMAL(9,6)   = NULL,
     @Size           FLOAT          = NULL,
     @Price          DECIMAL(14,2)  = NULL,
-    @DeedReference  VARCHAR(100)   = NULL
+    @DeedReference  VARCHAR(100)   = NULL,
+    @OwnerName      NVARCHAR(150)  = NULL,
+    @OwnerNIC       VARCHAR(20)    = NULL,
+    @OwnerAddress   NVARCHAR(255)  = NULL
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -447,6 +756,20 @@ BEGIN
         RETURN -2;
     END
 
+    -- CORRECTED (Mandatory Deed / Form-vs-Deed Verification requirement,
+    -- Seller Edit Status Protection): a Disapproved listing is a
+    -- SYSTEM-AUTOMATED verdict (Form-vs-Deed mismatch, or any non-price
+    -- Government Registry mismatch - see usp_Property_ApplyDeedVerificationOutcome's
+    -- own header comment). Editing ordinary property fields must not let a
+    -- Disapproved listing quietly escape back into the review workflow as
+    -- if the problem had been resolved - only an explicit new
+    -- verification run (SellerDeedVerificationSection's "Replace /
+    -- Re-verify Deed", which calls usp_Property_ApplyDeedVerificationOutcome
+    -- directly and is completely independent of this procedure) is allowed
+    -- to move it out of Disapproved. Every other status still resets to
+    -- 'Pending' on edit exactly as before (Approved -> Pending is the
+    -- existing, intended re-review trigger; Pending/Flagged/Rejected stay
+    -- Pending).
     UPDATE dbo.Property
     SET Title         = ISNULL(@Title,         Title),
         Description   = ISNULL(@Description,   Description),
@@ -457,7 +780,10 @@ BEGIN
         Size          = ISNULL(@Size,          Size),
         Price         = ISNULL(@Price,         Price),
         DeedReference = ISNULL(@DeedReference, DeedReference),
-        Status        = 'Pending'
+        OwnerName     = ISNULL(@OwnerName,     OwnerName),
+        OwnerNIC      = ISNULL(@OwnerNIC,      OwnerNIC),
+        OwnerAddress  = ISNULL(@OwnerAddress,  OwnerAddress),
+        Status        = CASE WHEN Status = 'Disapproved' THEN Status ELSE 'Pending' END
     WHERE PropertyID = @PropertyID;
 
     EXEC dbo.usp_Fraud_AnalyseProperty @PropertyID = @PropertyID;
@@ -1398,6 +1724,17 @@ BEGIN
     SET NOCOUNT ON;
 
     UPDATE dbo.Users SET NICVerified = 1 WHERE UserID = @TargetUserID;
+
+    -- Kept in lockstep with IdentityStatus (the other authoritative "seller
+    -- is verified" write, set by usp_User_SetIdentityStatus for the
+    -- automated Government Identity Registry path) so a manual Admin
+    -- verification cannot leave the two contradicting each other -
+    -- property listing gates on IdentityStatus, not NICVerified, so
+    -- without this a manual verification would silently fail to unlock
+    -- listing. Only touches Seller rows, matching IdentityStatus's own
+    -- Seller-only scope.
+    UPDATE dbo.Users SET IdentityStatus = 'Verified'
+    WHERE UserID = @TargetUserID AND Role = 'Seller';
 
     INSERT INTO dbo.AdminAction (AdminID, ActionType, TargetUserID, Remarks)
     VALUES (@AdminID, 'VerifyNIC', @TargetUserID, @Remarks);

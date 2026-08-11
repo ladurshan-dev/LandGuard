@@ -6,6 +6,7 @@ import type {
   PropertyListingResult,
   PropertySearchRequest,
   PropertySearchResponse,
+  SellerContactInfo,
   UpdatePropertyRequest,
   UploadPropertyImageRequest,
 } from '../types/property';
@@ -198,5 +199,25 @@ export async function deletePropertyImage(propertyId: number, imageId: number): 
     return response.data;
   } catch (error) {
     throw toApiError(error, { statusMessages: { 404: 'Image not found.' } });
+  }
+}
+
+/**
+ * GET /api/properties/{id}/seller-contact (RequireBuyer policy - Contact
+ * Seller workflow). Returns the Seller's name/phone/email/verified badge
+ * only for a currently-Approved property; PropertyService.GetSellerContactAsync
+ * returns the same generic "not found" for a Pending/Flagged/Rejected/
+ * Disapproved/Withdrawn property as for a nonexistent one, surfaced here as
+ * a 404 exactly like getPropertyById above. Called only when the Buyer
+ * explicitly clicks "Contact Seller" - never on page load, and the result
+ * is never persisted to localStorage/sessionStorage by the caller.
+ */
+export async function getSellerContact(propertyId: number): Promise<SellerContactInfo> {
+  try {
+    const response = await apiClient.get<SellerContactInfo>(`/properties/${propertyId}/seller-contact`);
+
+    return response.data;
+  } catch (error) {
+    throw toApiError(error, { statusMessages: { 404: 'Seller contact information is not available for this property.' } });
   }
 }

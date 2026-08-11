@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import { DashboardLayout } from '../../../layouts/DashboardLayout';
 import { useAuth } from '../../../hooks/useAuth';
+import { SellerIdentityStatusBanner } from '../../../components/seller/SellerIdentityStatusBanner';
 import { DeedDocumentUpload } from '../../../components/property/DeedDocumentUpload';
 import { createProperty, getPropertyById, updateProperty } from '../../../services/propertyService';
 import { verifyDeed } from '../../../services/deedVerificationService';
@@ -32,6 +33,10 @@ const LOCATION_MAX_LENGTH = 255;
 const DISTRICT_MAX_LENGTH = 100;
 const DEED_REFERENCE_MAX_LENGTH = 100;
 const DESCRIPTION_MAX_LENGTH = 4000;
+const OWNER_NAME_MAX_LENGTH = 150;
+const OWNER_ADDRESS_MAX_LENGTH = 255;
+/** Mirrors the backend's AuthValidationRules.NicPattern - old format: 9 digits + V/X; new format: 12 digits. */
+const OWNER_NIC_PATTERN = /^([0-9]{9}[VvXx]|[0-9]{12})$/;
 
 interface PropertyFormValues {
   title: string;
@@ -43,6 +48,9 @@ interface PropertyFormValues {
   size: string;
   price: string;
   deedReference: string;
+  ownerName: string;
+  ownerNic: string;
+  ownerAddress: string;
   regeocodeLocation: boolean;
 }
 
@@ -56,6 +64,9 @@ const EMPTY_DEFAULTS: PropertyFormValues = {
   size: '',
   price: '',
   deedReference: '',
+  ownerName: '',
+  ownerNic: '',
+  ownerAddress: '',
   regeocodeLocation: false,
 };
 
@@ -132,6 +143,9 @@ export default function PropertyFormPage() {
             size: detail.listing.size.toString(),
             price: detail.listing.price.toString(),
             deedReference: detail.listing.deedReference ?? '',
+            ownerName: detail.listing.ownerName ?? '',
+            ownerNic: detail.listing.ownerNic ?? '',
+            ownerAddress: detail.listing.ownerAddress ?? '',
             regeocodeLocation: false,
           });
         }
@@ -155,6 +169,27 @@ export default function PropertyFormPage() {
     return null;
   }
 
+  // Seller Government Identity Verification requirement: blocks the
+  // CREATE form outright for a Pending/Failed Seller, rather than letting
+  // them fill out the whole form only to have the submit rejected server-
+  // side. EDIT mode is untouched - identity verification only gates
+  // creating a NEW listing, per this requirement's own scope.
+  if (!isEditMode && user.identityStatus !== 'Verified') {
+    return (
+      <DashboardLayout title="List a Property" user={user}>
+        <SellerIdentityStatusBanner />
+        <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
+          <Typography color="text.secondary">
+            Your identity must be verified before you can list a property.
+          </Typography>
+          <Button variant="outlined" onClick={() => navigate('/seller/properties')} sx={{ mt: 2 }}>
+            Back to My Properties
+          </Button>
+        </Paper>
+      </DashboardLayout>
+    );
+  }
+
   const onSubmit = async (values: PropertyFormValues) => {
     setSubmitError(null);
     setDeedFileError(null);
@@ -162,6 +197,9 @@ export default function PropertyFormPage() {
     const trimmedDescription = values.description.trim();
     const trimmedDistrict = values.district.trim();
     const trimmedDeedReference = values.deedReference.trim();
+    const trimmedOwnerName = values.ownerName.trim();
+    const trimmedOwnerNic = values.ownerNic.trim();
+    const trimmedOwnerAddress = values.ownerAddress.trim();
     const latitude = values.latitude.trim() === '' ? undefined : Number(values.latitude);
     const longitude = values.longitude.trim() === '' ? undefined : Number(values.longitude);
 
@@ -189,6 +227,9 @@ export default function PropertyFormPage() {
           size: Number(values.size),
           price: Number(values.price),
           deedReference: trimmedDeedReference === '' ? undefined : trimmedDeedReference,
+          ownerName: trimmedOwnerName === '' ? undefined : trimmedOwnerName,
+          ownerNic: trimmedOwnerNic === '' ? undefined : trimmedOwnerNic,
+          ownerAddress: trimmedOwnerAddress === '' ? undefined : trimmedOwnerAddress,
           regeocodeLocation: values.regeocodeLocation,
         });
         navigate(`/seller/properties/${propertyId}`);
@@ -210,7 +251,10 @@ export default function PropertyFormPage() {
           longitude,
           size: Number(values.size),
           price: Number(values.price),
-          deedReference: trimmedDeedReference === '' ? undefined : trimmedDeedReference,
+          deedReference: trimmedDeedReference,
+          ownerName: trimmedOwnerName,
+          ownerNic: trimmedOwnerNic,
+          ownerAddress: trimmedOwnerAddress,
         });
 
         setSubmitPhase('verifying');
@@ -394,16 +438,78 @@ export default function PropertyFormPage() {
               <Grid size={12}>
                 <TextField
                   {...register('deedReference', {
+                    required: 'Deed Number is required.',
                     maxLength: {
                       value: DEED_REFERENCE_MAX_LENGTH,
-                      message: `Deed reference must be at most ${DEED_REFERENCE_MAX_LENGTH} characters.`,
+                      message: `Deed Number must be at most ${DEED_REFERENCE_MAX_LENGTH} characters.`,
                     },
                   })}
-                  label="Deed Reference (optional)"
+                  label="Deed Number"
                   fullWidth
                   disabled={isSubmitting}
                   error={Boolean(errors.deedReference)}
                   helperText={errors.deedReference?.message}
+                />
+              </Grid>
+
+              <Grid size={12}>
+                <Typography variant="subtitle2" sx={{ mt: 1 }}>
+                  Deed Owner Details
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  The registered owner information on the deed - this is checked against the deed document you
+                  upload, and must match it exactly.
+                </Typography>
+              </Grid>
+
+              <Grid size={12}>
+                <TextField
+                  {...register('ownerName', {
+                    required: 'Owner Name is required.',
+                    maxLength: {
+                      value: OWNER_NAME_MAX_LENGTH,
+                      message: `Owner Name must be at most ${OWNER_NAME_MAX_LENGTH} characters.`,
+                    },
+                  })}
+                  label="Owner Name"
+                  fullWidth
+                  disabled={isSubmitting}
+                  error={Boolean(errors.ownerName)}
+                  helperText={errors.ownerName?.message}
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  {...register('ownerNic', {
+                    required: 'Owner NIC is required.',
+                    pattern: {
+                      value: OWNER_NIC_PATTERN,
+                      message: 'Enter a valid Sri Lankan NIC (9 digits followed by V or X, or 12 digits).',
+                    },
+                  })}
+                  label="Owner NIC"
+                  fullWidth
+                  disabled={isSubmitting}
+                  error={Boolean(errors.ownerNic)}
+                  helperText={errors.ownerNic?.message}
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  {...register('ownerAddress', {
+                    required: 'Owner Address is required.',
+                    maxLength: {
+                      value: OWNER_ADDRESS_MAX_LENGTH,
+                      message: `Owner Address must be at most ${OWNER_ADDRESS_MAX_LENGTH} characters.`,
+                    },
+                  })}
+                  label="Owner Address"
+                  fullWidth
+                  disabled={isSubmitting}
+                  error={Boolean(errors.ownerAddress)}
+                  helperText={errors.ownerAddress?.message}
                 />
               </Grid>
 

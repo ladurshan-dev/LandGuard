@@ -119,6 +119,13 @@ public static class DependencyInjection
         // see DummyGovernmentRegistryService's doc comment.
         services.AddScoped<IGovernmentRegistryService, DummyGovernmentRegistryService>();
 
+        // Seller Government Identity Verification requirement: a SEPARATE
+        // dummy in-memory registry - people/NIC/legal identity - never the
+        // same class/data as the LAND registry above. See
+        // IGovernmentIdentityRegistryService's own doc comment for why the
+        // two must stay structurally distinct.
+        services.AddScoped<IGovernmentIdentityRegistryService, DummyGovernmentIdentityRegistryService>();
+
         // Government Registry module, Phase 5B (deed verification
         // persistence): follows the exact per-area wrapper pattern
         // IFraudStoredProcedures/IPropertyStoredProcedures already

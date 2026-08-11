@@ -15,13 +15,44 @@ import CloseIcon from '@mui/icons-material/Close';
  * matching every other *Panel/*Upload component in this folder (e.g.
  * DeedVerificationPanel) that leaves the actual API call to its caller.
  *
- * Accepts exactly what OcrValidationRules already enforces server-side
- * (application/pdf, image/jpeg, image/png, image/tiff) - the `accept`
- * attribute below is a UX hint only, not a second copy of that validation;
- * a rejected file still gets the backend's own error message back through
- * the caller's existing ApiError handling.
+ * PDF-ONLY CORRECTION (manual-testing fix, confirmed root cause via a
+ * controlled `accept=".pdf,application/pdf"` test that immediately showed
+ * every PDF in the native Windows file picker): the deed document is now
+ * PDF-only, both here and in GovernmentDeedComparisonService.CompareAsync
+ * on the backend (that method's own PDF-ONLY CORRECTION comment). This
+ * component previously also accepted image/jpeg, image/png, image/tiff
+ * (OcrValidationRules' broader set, which still backs the generic, UI-unused
+ * POST /api/ocr/extract endpoint) - that is no longer offered here, and a
+ * selected/dropped non-PDF file is rejected client-side below rather than
+ * only relying on the `accept` attribute (which is a picker hint only, not
+ * enforcement - drag-and-drop bypasses it entirely).
+ *
+ * This constant, and the validation using it, are shared, unchanged, by
+ * both call sites (PropertyFormPage's create-time upload and
+ * SellerDeedVerificationSection's Replace/Re-verify Deed) - there is only
+ * ever one deed input. Property IMAGE upload (SellerPropertyDetailsPage's
+ * separate, unrelated <input accept="image/jpeg,image/png,image/webp">) is
+ * untouched.
  */
-const ACCEPTED_EXTENSIONS = '.pdf,.jpg,.jpeg,.png,.tif,.tiff';
+const ACCEPTED_EXTENSIONS = '.pdf,application/pdf';
+
+/**
+ * True MIME-type check first (`file.type === 'application/pdf'`, what the
+ * browser itself determined from the file's actual content/registration,
+ * not just its name). Falls back to the filename extension only when the
+ * browser reports no/an unhelpful MIME type (some Windows file-manager/
+ * browser combinations do this for an otherwise-legitimate PDF) - a
+ * genuine non-PDF renamed to end in ".pdf" would still be caught by the
+ * backend's own content-type check either way (defense in depth, the same
+ * principle every *RequestValidator in this codebase already follows
+ * alongside its own stored-procedure/service-layer re-check).
+ */
+function isPdfFile(file: File): boolean {
+  if (file.type === 'application/pdf') {
+    return true;
+  }
+  return file.name.toLowerCase().endsWith('.pdf');
+}
 
 function formatFileSize(bytes: number): string {
   if (bytes < 1024) {
@@ -54,11 +85,24 @@ export function DeedDocumentUpload({
 }: DeedDocumentUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragActive, setIsDragActive] = useState(false);
+  // Client-side PDF-only rejection (manual-testing fix) - the `accept`
+  // attribute is a picker hint only; it does not stop a non-PDF file
+  // dropped via drag-and-drop, which never goes through the file input's
+  // own filtering at all. Takes priority over the parent-supplied `error`
+  // prop (a fresh, obviously-invalid selection is more relevant than a
+  // stale server-side error from a previous attempt), cleared as soon as a
+  // valid PDF is chosen or the current selection is removed.
+  const [localError, setLocalError] = useState<string | null>(null);
 
   const handleInputChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
-      onFileSelected(file);
+      if (isPdfFile(file)) {
+        setLocalError(null);
+        onFileSelected(file);
+      } else {
+        setLocalError('Only PDF files are accepted for the deed document.');
+      }
     }
     // Allows re-selecting the exact same file after Remove, which a bare
     // input's own change event would otherwise silently ignore.
@@ -73,7 +117,12 @@ export function DeedDocumentUpload({
     }
     const file = event.dataTransfer.files?.[0];
     if (file) {
-      onFileSelected(file);
+      if (isPdfFile(file)) {
+        setLocalError(null);
+        onFileSelected(file);
+      } else {
+        setLocalError('Only PDF files are accepted for the deed document.');
+      }
     }
   };
 
@@ -123,7 +172,7 @@ export function DeedDocumentUpload({
             Upload Deed
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Drag and drop, or click to browse &middot; PDF preferred
+            Drag and drop, or click to browse &middot; PDF only
           </Typography>
           <input
             ref={inputRef}
@@ -158,15 +207,23 @@ export function DeedDocumentUpload({
               {formatFileSize(selectedFile.size)}
             </Typography>
           </Box>
-          <IconButton size="small" onClick={onRemove} disabled={disabled} aria-label="Remove selected deed document">
+          <IconButton
+            size="small"
+            onClick={() => {
+              setLocalError(null);
+              onRemove();
+            }}
+            disabled={disabled}
+            aria-label="Remove selected deed document"
+          >
             <CloseIcon fontSize="small" />
           </IconButton>
         </Stack>
       )}
 
-      {error && (
+      {(localError ?? error) && (
         <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
-          {error}
+          {localError ?? error}
         </Typography>
       )}
     </Box>

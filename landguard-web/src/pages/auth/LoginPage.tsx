@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Link as RouterLink, useLocation, useNavigate } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
 import {
   Alert,
@@ -9,6 +9,7 @@ import {
   CircularProgress,
   IconButton,
   InputAdornment,
+  Link,
   Paper,
   Stack,
   TextField,
@@ -290,6 +291,13 @@ export default function LoginPage() {
             >
               {isSubmitting ? 'Signing in...' : 'Sign in'}
             </Button>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2.5, textAlign: 'center' }}>
+              Don&apos;t have an account?{' '}
+              <Link component={RouterLink} to="/register" underline="hover">
+                Create account
+              </Link>
+            </Typography>
           </Box>
         </Paper>
       </Box>

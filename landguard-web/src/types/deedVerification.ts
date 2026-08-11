@@ -7,8 +7,24 @@
  * project follows.
  */
 
-/** "Verified" | "Fraudulent" | "PriceAnomaly" | "Unverified" | "UnverifiedCancelled" - DeedVerificationStatus's exact string name. This is authoritative deed-authenticity evidence, kept separate from the legacy RiskScore/RiskLevel/FraudStatus supporting indicators. */
-export type DeedVerificationStatus = 'Verified' | 'Fraudulent' | 'PriceAnomaly' | 'Unverified' | 'UnverifiedCancelled';
+/**
+ * "Verified" | "Fraudulent" | "PriceAnomaly" | "Unverified" |
+ * "UnverifiedCancelled" | "FormMismatch" - DeedVerificationStatus's exact
+ * string name. This is authoritative deed-authenticity evidence, kept
+ * separate from the legacy RiskScore/RiskLevel/FraudStatus supporting
+ * indicators. "FormMismatch" (Mandatory Deed / Form-vs-Deed Verification
+ * requirement) means the seller's own listing/account fields didn't match
+ * their own uploaded deed - decided before any Government Registry lookup
+ * is attempted, so its `evidence` entries are Form-vs-Deed comparisons
+ * (FieldName prefixed "Form"), never a government comparison.
+ */
+export type DeedVerificationStatus =
+  | 'Verified'
+  | 'Fraudulent'
+  | 'PriceAnomaly'
+  | 'Unverified'
+  | 'UnverifiedCancelled'
+  | 'FormMismatch';
 
 /** "Active" | "Cancelled" | "Suspended" | null. */
 export type GovernmentRecordStatus = 'Active' | 'Cancelled' | 'Suspended';

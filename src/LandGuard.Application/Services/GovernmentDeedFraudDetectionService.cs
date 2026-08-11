@@ -86,6 +86,29 @@ public class GovernmentDeedFraudDetectionService : IGovernmentDeedFraudDetection
 
     private const string PriceFieldName = "Price";
 
+    /// <summary>
+    /// Mandatory Deed / Form-vs-Deed Verification requirement:
+    /// <c>FormDeedComparer.Compare</c>'s "Form"-prefixed
+    /// <c>DeedFieldComparisonResult.FieldName</c> values, each mapped to
+    /// the specific <see cref="DeedFraudReason"/> it produces when
+    /// mismatched - the exact same "one reason per field" shape
+    /// <see cref="MaterialFieldReasons"/> establishes above, used only by
+    /// <see cref="ClassifyFormMismatch"/>. Exactly 4 entries (Owner Name /
+    /// Owner NIC / Owner Address / Deed Number requirement) - FormDeedComparer
+    /// no longer produces "FormLocation"/"FormDistrict"/"FormLandSize" at
+    /// all, so this dictionary has no entries for them (their
+    /// DeedFraudReason members still exist, retired, for historical rows -
+    /// see each one's own doc comment).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, DeedFraudReason> FormFieldReasons =
+        new Dictionary<string, DeedFraudReason>(StringComparer.Ordinal)
+        {
+            ["FormOwnerNIC"] = DeedFraudReason.FormOwnerNicMismatch,
+            ["FormOwnerName"] = DeedFraudReason.FormOwnerNameMismatch,
+            ["FormOwnerAddress"] = DeedFraudReason.FormOwnerAddressMismatch,
+            ["FormDeedNumber"] = DeedFraudReason.FormDeedNumberMismatch
+        };
+
     public GovernmentDeedFraudDetectionResult Classify(GovernmentDeedComparisonReport report)
     {
         ArgumentNullException.ThrowIfNull(report);
@@ -95,18 +118,51 @@ public class GovernmentDeedFraudDetectionService : IGovernmentDeedFraudDetection
             "MissingOrCancelledGovernmentRecord" => ClassifyMissingOrCancelled(report),
             "Clean" => BuildResult(report, DeedVerificationStatus.Verified, Array.Empty<DeedFraudReason>()),
             "Mismatch" => ClassifyMismatch(report),
+            "FormMismatch" => ClassifyFormMismatch(report),
+            // Global Duplicate-Property Prevention requirement: produced
+            // by GovernmentDeedComparisonService.CompareAsync only once no
+            // material field mismatched - see that method's own inline
+            // comment for exactly where this is decided.
+            "DuplicateProperty" => BuildResult(report, DeedVerificationStatus.DuplicateProperty, new[] { DeedFraudReason.DuplicatePropertyReference }),
 
             // GovernmentDeedComparisonService only ever produces one of the
-            // three outcomes above. An unrecognised value would mean a
-            // future change to that service introduced a new outcome this
+            // outcomes above. An unrecognised value would mean a future
+            // change to that service introduced a new outcome this
             // classifier was never updated for - surfacing that loudly as a
-            // defensive exception is safer than silently guessing a status,
-            // and per this phase's own instruction, GovernmentDeedComparisonService
-            // is not something this change is allowed to modify to add a
-            // new outcome without flagging it first.
+            // defensive exception is safer than silently guessing a status.
             _ => throw new InvalidOperationException(
                 $"Unrecognised GovernmentDeedComparisonReport.OverallOutcome '{report.OverallOutcome}' - GovernmentDeedFraudDetectionService has no classification rule for it.")
         };
+    }
+
+    /// <summary>
+    /// Mandatory Deed / Form-vs-Deed Verification requirement.
+    /// <see cref="GovernmentDeedComparisonReport.Fields"/> here holds
+    /// <c>FormDeedComparer.Compare</c>'s output (FieldName values prefixed
+    /// "Form") rather than a government comparison - see that report
+    /// property's own doc comment. Every mismatched field maps to its own
+    /// <see cref="DeedFraudReason"/> (added alongside <see cref="MaterialFieldReasons"/>,
+    /// same "one reason per material field, plus MultipleFieldMismatch when
+    /// more than one" shape <see cref="ClassifyMismatch"/> already
+    /// establishes), and <see cref="BuildSummary"/> is given the exact
+    /// Seller-facing header line the Mandatory Deed / Form-vs-Deed
+    /// Verification requirement specifies verbatim, ahead of the
+    /// per-reason sentences.
+    /// </summary>
+    private static GovernmentDeedFraudDetectionResult ClassifyFormMismatch(GovernmentDeedComparisonReport report)
+    {
+        var mismatches = report.Fields.Where(f => !f.Match).ToList();
+
+        var reasons = new List<DeedFraudReason>();
+
+        if (mismatches.Count > 1)
+        {
+            reasons.Add(DeedFraudReason.MultipleFieldMismatch);
+        }
+
+        reasons.AddRange(mismatches.Select(f => FormFieldReasons[f.FieldName]));
+
+        return BuildResult(report, DeedVerificationStatus.FormMismatch, reasons);
     }
 
     /// <summary>
@@ -229,6 +285,28 @@ public class GovernmentDeedFraudDetectionService : IGovernmentDeedFraudDetection
 
         var sentences = reasons.Select(DescribeReason).Distinct();
 
+        // Mandatory Deed / Form-vs-Deed Verification requirement: the exact
+        // Seller-facing header line the requirement specifies verbatim,
+        // ahead of the per-reason sentences every other status already
+        // produces via the loop below - this is the one status where the
+        // requirement itself dictates fixed wording rather than leaving it
+        // to this class's own phrasing.
+        if (status == DeedVerificationStatus.FormMismatch)
+        {
+            return string.Join(" ", new[] { "Listing Disapproved — Property Information Does Not Match Deed." }.Concat(sentences));
+        }
+
+        // Global Duplicate-Property Prevention requirement: the exact
+        // Seller-facing message this requirement specifies verbatim -
+        // deliberately the ENTIRE summary (no per-reason sentence
+        // appended), since DescribeReason's own DuplicatePropertyReference
+        // text below would be redundant with this fixed wording and the
+        // other PropertyID/Seller must never be named regardless.
+        if (status == DeedVerificationStatus.DuplicateProperty)
+        {
+            return "Listing Disapproved — This property is already registered as another LandGuard listing.";
+        }
+
         return string.Join(" ", sentences);
     }
 
@@ -260,6 +338,29 @@ public class GovernmentDeedFraudDetectionService : IGovernmentDeedFraudDetection
             "The government registry record is cancelled, so the uploaded deed cannot be verified against an active government record.",
         DeedFraudReason.GovernmentDocumentUnavailable =>
             "The government registry record is active, but its trusted deed document could not be retrieved, so the uploaded deed cannot be verified.",
+        // RETIRED (Owner Name / Owner NIC / Owner Address requirement) - no
+        // longer produced by ClassifyFormMismatch (see FormFieldReasons'
+        // own doc comment). Wording kept unchanged so a DeedVerificationReason
+        // row persisted before this requirement still displays exactly as
+        // it always did.
+        DeedFraudReason.FormSellerNicMismatch =>
+            "Seller NIC does not match the uploaded deed.",
+        DeedFraudReason.FormOwnerNameMismatch =>
+            "Owner name does not match the uploaded deed.",
+        DeedFraudReason.FormDeedNumberMismatch =>
+            "Deed number does not match the uploaded deed.",
+        DeedFraudReason.FormLocationMismatch =>
+            "Location does not match the uploaded deed.",
+        DeedFraudReason.FormDistrictMismatch =>
+            "District does not match the uploaded deed.",
+        DeedFraudReason.FormLandSizeMismatch =>
+            "Land extent does not match the uploaded deed.",
+        DeedFraudReason.FormOwnerNicMismatch =>
+            "Owner NIC does not match the uploaded deed.",
+        DeedFraudReason.FormOwnerAddressMismatch =>
+            "Owner address does not match the uploaded deed.",
+        DeedFraudReason.DuplicatePropertyReference =>
+            "This property is already registered as another LandGuard listing.",
         _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unrecognised DeedFraudReason.")
     };
 }

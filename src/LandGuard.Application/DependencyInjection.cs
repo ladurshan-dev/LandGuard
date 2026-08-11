@@ -34,6 +34,9 @@ public static class DependencyInjection
 
         services.AddScoped<IAuthService, AuthService>();
 
+        // Seller Government Identity Verification requirement.
+        services.AddScoped<ISellerIdentityVerificationService, SellerIdentityVerificationService>();
+
         // Module 4 (Property Management).
         services.AddScoped<IPropertyService, PropertyService>();
 

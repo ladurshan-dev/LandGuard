@@ -21,9 +21,27 @@ public interface IAuthService
 
     Task<Result<AuthResponse>> RegisterSellerAsync(SellerRegisterRequest request, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// POST /api/auth/register - the single public self-registration entry
+    /// point (Buyer or Seller, chosen by <see cref="RegisterRequest.Role"/>,
+    /// never Admin). Dispatches to <see cref="RegisterBuyerAsync"/>/
+    /// <see cref="RegisterSellerAsync"/> rather than duplicating their
+    /// hashing/persistence/JWT logic - see AuthService's implementation.
+    /// </summary>
+    Task<Result<AuthResponse>> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default);
+
     Task<Result<AuthResponse>> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
 
     Task<Result<UserProfile>> GetCurrentUserAsync(int userId, CancellationToken cancellationToken = default);
 
     Task<Result> ChangePasswordAsync(int userId, ChangePasswordRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// POST /api/auth/identity/reverify (Seller Government Identity
+    /// Verification requirement). <paramref name="callerId"/> must be the
+    /// caller's own id from the JWT - never trust a client-supplied
+    /// UserID. See AuthService's own implementation for exactly how a
+    /// Pending vs a Failed Seller's retry is handled.
+    /// </summary>
+    Task<Result<UserProfile>> ReverifyIdentityAsync(int callerId, CancellationToken cancellationToken = default);
 }

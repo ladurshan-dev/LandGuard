@@ -28,5 +28,15 @@ public class CreatePropertyRequest
     /// <summary>Asking price in LKR.</summary>
     public decimal Price { get; set; }
 
-    public string? DeedReference { get; set; }
+    /// <summary>Mandatory - see CreatePropertyRequestValidator.</summary>
+    public string DeedReference { get; set; } = null!;
+
+    /// <summary>The deed's registered owner name - mandatory, explicit deed-owner data distinct from the Seller account's own Name. See LandGuard.Domain.Entities.Property.OwnerName's doc comment.</summary>
+    public string OwnerName { get; set; } = null!;
+
+    /// <summary>The deed's registered owner NIC - mandatory. Sri Lankan NIC format, same pattern as Auth's own NIC validation (AuthValidationRules.NicPattern).</summary>
+    public string OwnerNic { get; set; } = null!;
+
+    /// <summary>The deed's registered owner address - mandatory.</summary>
+    public string OwnerAddress { get; set; } = null!;
 }

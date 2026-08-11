@@ -50,9 +50,23 @@ public interface IPropertyService
     Task<Result<PropertyDetail>> GetByIdAsync(
         int propertyId, int? callerId, string? callerRole, CancellationToken cancellationToken = default);
 
-    /// <summary>Public search over published (Approved, active-seller) listings only - FR10.</summary>
+    /// <summary>
+    /// Public search over published (Approved, active-seller) listings
+    /// only - FR10. <paramref name="callerRole"/> is used only for the
+    /// Buyer-privacy redaction below, never for visibility (every caller,
+    /// including anonymous, already only ever sees Approved listings here -
+    /// see usp_Property_Search/vw_PublishedProperty).
+    ///
+    /// Buyer privacy requirement: internal fraud-engine output
+    /// (RiskScore/RiskLevel/FraudStatus/RiskSummary/RiskGeneratedDate,
+    /// and the ability to filter/sort by risk) must never reach a
+    /// non-Admin caller, even for an Approved listing - Approval is
+    /// sufficient information for a Buyer. This method strips those
+    /// fields (and forces the risk-based filter/sort off) for every
+    /// caller except an Admin before returning.
+    /// </summary>
     Task<Result<PropertySearchResponse>> SearchAsync(
-        PropertySearchRequest request, CancellationToken cancellationToken = default);
+        PropertySearchRequest request, string? callerRole, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The seller dashboard grid (FR08) - every status, not just Approved.
@@ -115,4 +129,24 @@ public interface IPropertyService
         int callerId,
         string? callerRole,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Contact Seller workflow: returns the Seller's name/phone/email/
+    /// verified-badge for <paramref name="propertyId"/> - Buyer-only at the
+    /// controller (RequireBuyer policy), and gated here, server-side, on
+    /// the property currently being "Approved" (never trusts that the
+    /// frontend already checked this). A Pending/Flagged/Rejected/
+    /// Disapproved/Withdrawn property, or a nonexistent one, both return the
+    /// same generic "Property not found" failure - the same account-
+    /// enumeration-safe pattern <see cref="GetByIdAsync"/> already uses -
+    /// so a Buyer cannot distinguish "doesn't exist" from "not public yet"
+    /// by probing this endpoint. <paramref name="buyerId"/> is not currently
+    /// used to further restrict the result (any authenticated Buyer may
+    /// request contact details for any Approved listing - this is not a
+    /// per-buyer allowlist), but is threaded through for symmetry with
+    /// every other authenticated action on this interface and for future
+    /// auditing.
+    /// </summary>
+    Task<Result<SellerContactInfo>> GetSellerContactAsync(
+        int propertyId, int buyerId, CancellationToken cancellationToken = default);
 }

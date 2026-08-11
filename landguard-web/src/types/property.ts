@@ -29,7 +29,14 @@
  * Not reachable through the normal edit flow (usp_Property_Update refuses
  * to touch a Withdrawn property) - there is no "Relist" action yet.
  */
-export type PropertyStatus = 'Pending' | 'Approved' | 'Flagged' | 'Rejected' | 'Withdrawn';
+/**
+ * 'Disapproved' is a SYSTEM-AUTOMATED outcome (Mandatory Deed / Form-vs-
+ * Deed Verification requirement) - the seller's own form data didn't match
+ * their uploaded deed, or the uploaded deed didn't match the Government
+ * Registry. Distinct from 'Rejected', which stays a manual Admin decision -
+ * see LandGuard.Domain.Enums.PropertyStatus's own doc comment.
+ */
+export type PropertyStatus = 'Pending' | 'Approved' | 'Flagged' | 'Rejected' | 'Withdrawn' | 'Disapproved';
 
 /** dbo.RiskReport.RiskLevel banding - "Low" until the fraud engine has run at least once. */
 export type RiskLevel = 'Low' | 'Medium' | 'High';
@@ -38,7 +45,7 @@ export type RiskLevel = 'Low' | 'Medium' | 'High';
 export type FraudStatus = 'Clean' | 'Suspicious' | 'Fraudulent';
 
 /** usp_Property_Search's @SortBy parameter - see PropertyValidationRules.ValidSortOptions on the backend. */
-export type PropertySortOption = 'Newest' | 'PriceAsc' | 'PriceDesc' | 'RiskAsc';
+export type PropertySortOption = 'Newest' | 'Oldest' | 'PriceAsc' | 'PriceDesc' | 'RiskAsc';
 
 /**
  * Mirrors Common.Models.PropertyListingResult exactly - returned by
@@ -57,19 +64,65 @@ export interface PropertyListingResult {
   /** Asking price in LKR. */
   price: number;
   pricePerPerch: number | null;
+  /**
+   * A real legal-document identifier - null whenever the caller is neither
+   * this listing's owner nor an Admin (Buyer-privacy fix: previously sent
+   * unredacted to every caller, including a Buyer with no legitimate need
+   * to see it - see PropertyService.RedactOwnerFields on the backend, the
+   * one place this is actually enforced, alongside ownerName/ownerNic/
+   * ownerAddress below).
+   */
   deedReference: string | null;
+  /**
+   * The deed's registered owner name (Owner Name / Owner NIC / Owner
+   * Address requirement - explicit deed-owner data, no longer substituted
+   * with the Seller account's own name). Null whenever the caller is
+   * neither this listing's owner nor an Admin - see ownerNic's doc
+   * comment.
+   */
+  ownerName: string | null;
+  /**
+   * The deed's registered owner NIC. Sensitive PII: null for a
+   * Buyer/anonymous/public caller viewing someone else's Approved listing,
+   * exactly like riskScore - see PropertyService.RedactOwnerFields on the
+   * backend, the one place this is actually enforced. Non-null only for
+   * the owning Seller or an Admin.
+   */
+  ownerNic: string | null;
+  /** The deed's registered owner address. Null for a Buyer/public caller - see ownerNic's doc comment. */
+  ownerAddress: string | null;
   status: PropertyStatus;
   /** ISO 8601 timestamp. */
   uploadDate: string;
   sellerId: number;
   sellerName: string;
+  /**
+   * Contact Seller workflow: null whenever the caller is neither this
+   * listing's owner nor an Admin - a Buyer no longer receives the Seller's
+   * phone number as part of the general property read (previously sent
+   * unredacted to every caller). The only way for a Buyer to obtain it is
+   * the dedicated `getSellerContact` endpoint, gated to an Approved
+   * property, requested explicitly via the "Contact Seller" action - see
+   * PropertyService.RedactSellerContactFields on the backend.
+   */
   sellerPhone: string | null;
+  /** Safe to show a Buyer before they request contact - a simple "Verified Seller" badge, not the NIC itself. */
   sellerNicVerified: boolean;
+  /**
+   * Buyer privacy requirement: null whenever the caller is neither this
+   * listing's owner nor an Admin (i.e. a Buyer, or anonymous, viewing
+   * someone else's Approved listing) - internal fraud-engine output must
+   * never reach a Buyer, even for an Approved listing. Non-null for the
+   * owning Seller or an Admin. See PropertyService.SearchAsync/
+   * GetByIdAsync's redaction logic on the backend.
+   */
   riskScore: number | null;
-  riskLevel: RiskLevel;
-  fraudStatus: FraudStatus;
+  /** Null for a Buyer/public caller - see riskScore's doc comment. */
+  riskLevel: RiskLevel | null;
+  /** Null for a Buyer/public caller - see riskScore's doc comment. */
+  fraudStatus: FraudStatus | null;
   riskSummary: string | null;
-  /** ISO 8601 timestamp, null until the fraud engine has run at least once. */
+  /** ISO 8601 timestamp, null until the fraud engine has run at least once, or when redacted for a Buyer/public caller - see riskScore's doc comment. */
   riskGeneratedDate: string | null;
   coverImageUrl: string | null;
   imageCount: number;
@@ -142,7 +195,14 @@ export interface CreatePropertyRequest {
   size: number;
   /** Asking price in LKR. */
   price: number;
-  deedReference?: string;
+  /** Mandatory (Owner Name / Owner NIC / Owner Address requirement) - see CreatePropertyRequestValidator on the backend. */
+  deedReference: string;
+  /** The deed's registered owner name - mandatory, explicit deed-owner data distinct from the Seller account's own name. */
+  ownerName: string;
+  /** The deed's registered owner NIC - mandatory. Sri Lankan NIC format. */
+  ownerNic: string;
+  /** The deed's registered owner address - mandatory. */
+  ownerAddress: string;
 }
 
 /**
@@ -161,6 +221,12 @@ export interface UpdatePropertyRequest {
   size?: number;
   price?: number;
   deedReference?: string;
+  /** The deed's registered owner name. Optional here (omitting it on an edit leaves the existing value unchanged, it does not clear a mandatory field). */
+  ownerName?: string;
+  /** The deed's registered owner NIC. Optional here - see ownerName's doc comment. */
+  ownerNic?: string;
+  /** The deed's registered owner address. Optional here - see ownerName's doc comment. */
+  ownerAddress?: string;
   /** True to re-geocode from the (possibly just-changed) location/district instead of keeping the existing coordinates - ignored if latitude/longitude are supplied explicitly. Always sent (the backend's own default is false, not omitted). */
   regeocodeLocation: boolean;
 }
@@ -197,4 +263,19 @@ export interface PropertySearchRequest {
 export interface UploadPropertyImageRequest {
   file: File;
   isPrimary: boolean;
+}
+
+/**
+ * Mirrors Common.Models.SellerContactInfo exactly - GET
+ * /api/properties/{id}/seller-contact's response body (Contact Seller
+ * workflow). Deliberately the smallest DTO in this file: no sellerId,
+ * no NIC, no address, no deed/verification/fraud data - see that
+ * endpoint's own doc comment on the backend for why. Buyer-only, and only
+ * ever returned for a currently-Approved property.
+ */
+export interface SellerContactInfo {
+  sellerName: string;
+  phone: string | null;
+  email: string | null;
+  verifiedSeller: boolean;
 }

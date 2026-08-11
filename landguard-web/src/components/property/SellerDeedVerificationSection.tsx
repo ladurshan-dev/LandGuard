@@ -9,6 +9,16 @@ import type { DeedVerificationResponse } from '../../types/deedVerification';
 
 interface SellerDeedVerificationSectionProps {
   propertyId: number;
+  /**
+   * Called once after a verify/re-verify POST succeeds, alongside this
+   * component's own loadHistory() refresh - lets the parent
+   * (SellerPropertyDetailsPage) re-fetch PropertyDetail so its status chip
+   * and any status-dependent messaging reflect the new Property.Status
+   * (Approved/Pending/Disapproved) immediately, without the seller having
+   * to reload the page. Optional and a no-op if omitted, so this component
+   * still works standalone.
+   */
+  onVerified?: () => void;
 }
 
 /**
@@ -29,7 +39,7 @@ interface SellerDeedVerificationSectionProps {
  * append-only - see the backend's own DeedVerification entity doc
  * comment).
  */
-export function SellerDeedVerificationSection({ propertyId }: SellerDeedVerificationSectionProps) {
+export function SellerDeedVerificationSection({ propertyId, onVerified }: SellerDeedVerificationSectionProps) {
   const [history, setHistory] = useState<DeedVerificationResponse[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -71,6 +81,13 @@ export function SellerDeedVerificationSection({ propertyId }: SellerDeedVerifica
       setIsUploadFormOpen(false);
       setIsLoading(true);
       loadHistory();
+      // Property.Status may have just changed (Approved/Pending/Disapproved
+      // - see usp_Property_ApplyDeedVerificationOutcome/
+      // usp_Property_MarkPendingForReverification) as a side effect of the
+      // POST above, entirely independent of this component's own history
+      // state - let the parent re-fetch PropertyDetail so its status chip
+      // reflects that immediately too.
+      onVerified?.();
     } catch (error) {
       setVerifyError(error instanceof ApiError ? error.message : 'Something went wrong. Please try again.');
     } finally {

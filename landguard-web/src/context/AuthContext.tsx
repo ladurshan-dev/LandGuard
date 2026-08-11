@@ -5,7 +5,7 @@ import * as authService from '../services/authService';
 import { clearSession, loadSession, saveSession } from '../utils/authStorage';
 import { isTokenExpired } from '../utils/jwt';
 import { AuthContext } from './AuthContextInstance';
-import type { AuthContextValue, AuthUser, LoginRequest, UserRole } from '../types/auth';
+import type { AuthContextValue, AuthUser, LoginRequest, RegisterRequest, UserRole } from '../types/auth';
 
 /**
  * The single owner of the app's live authentication state. Every other
@@ -96,6 +96,42 @@ export function AuthProvider({ children }: AuthProviderProps) {
     return response.user;
   }, []);
 
+  const reverifyIdentity = useCallback(async (): Promise<AuthUser> => {
+    const updatedUser = await authService.reverifyIdentity();
+
+    // Only the cached user object changes here - the session's own
+    // accessToken/expiresAtUtc are read back from storage unchanged
+    // (this call never issues a new token, see authService.reverifyIdentity's
+    // own doc comment), so re-persisting them alongside the refreshed user
+    // is just "save the same session, with an updated user" rather than a
+    // second login.
+    const stored = loadSession();
+
+    setSession((previous) => {
+      if (stored) {
+        saveSession({ accessToken: stored.accessToken, user: updatedUser, expiresAtUtc: stored.expiresAtUtc });
+      }
+
+      return { user: updatedUser, accessToken: previous.accessToken };
+    });
+
+    return updatedUser;
+  }, []);
+
+  const register = useCallback(async (request: RegisterRequest): Promise<AuthUser> => {
+    const response = await authService.register(request);
+
+    saveSession({
+      accessToken: response.accessToken,
+      user: response.user,
+      expiresAtUtc: response.expiresAtUtc,
+    });
+
+    setSession({ user: response.user, accessToken: response.accessToken });
+
+    return response.user;
+  }, []);
+
   const logout = useCallback(() => {
     authService.logout();
     setSession({ user: null, accessToken: null });
@@ -115,11 +151,13 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isInitializing,
       isAuthenticated: user !== null && accessToken !== null,
       login,
+      register,
+      reverifyIdentity,
       logout,
       hasRole,
       isRole,
     }),
-    [user, accessToken, isInitializing, login, logout, hasRole, isRole],
+    [user, accessToken, isInitializing, login, register, reverifyIdentity, logout, hasRole, isRole],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
