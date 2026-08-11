@@ -1,7 +1,7 @@
 import { apiClient } from '../api/axios';
 import { clearSession } from '../utils/authStorage';
 import { ApiError, toApiError } from '../utils/apiError';
-import type { AuthUser, LoginRequest, LoginResponse, UserRole } from '../types/auth';
+import type { AuthUser, LoginRequest, LoginResponse, RegisterRequest, RegisterResponse, UserRole } from '../types/auth';
 
 /**
  * The data-access layer for authentication - HTTP calls and the safety
@@ -95,6 +95,79 @@ export async function login(credentials: LoginRequest): Promise<LoginResponse> {
     // reads better than apiError's generic 401 default - every other
     // status falls through to that shared default unchanged.
     throw toApiError(error, { statusMessages: { 401: 'Invalid email or password.' } });
+  }
+}
+
+/**
+ * Calls POST /auth/register and returns the response exactly as the
+ * backend sent it - same response shape as login() (RegisterResponse is
+ * LoginResponse), so it reuses the same shape/role guards rather than
+ * duplicating them. The backend already rejects a mismatched
+ * confirmPassword, an invalid/duplicate email, a missing/invalid/duplicate
+ * Seller NIC and any role other than Buyer/Seller (see
+ * RegisterRequestValidator and usp_User_Register); this function's only
+ * job is the same "is the 200 response actually shaped right" and
+ * "is the role one we recognize" safety net login() applies, plus
+ * surfacing whatever specific message the backend supplied (e.g. "This
+ * email address is already registered.") via toApiError rather than a
+ * generic one.
+ */
+export async function register(request: RegisterRequest): Promise<RegisterResponse> {
+  try {
+    const response = await apiClient.post<RegisterResponse>('/auth/register', request);
+
+    if (!isLoginResponseShape(response.data)) {
+      throw new ApiError('Unexpected response from the server. Please try again.', null, [], false);
+    }
+
+    if (!KNOWN_ROLES.includes(response.data.user.role)) {
+      throw new ApiError(
+        'Your account role is not recognized. Please contact an administrator.',
+        null,
+        [],
+        false,
+      );
+    }
+
+    return response.data;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    throw toApiError(error);
+  }
+}
+
+/** Guards POST /auth/identity/reverify's response body - the backend's UserProfile shape, field-for-field identical to AuthUser (see AuthUser's own doc comment). */
+function isAuthUserProfileShape(value: unknown): value is AuthUser {
+  return isAuthUserShape(value);
+}
+
+/**
+ * Calls POST /auth/identity/reverify - Seller Government Identity
+ * Verification requirement. No credentials/body: the target account
+ * always comes from the caller's own JWT (already attached by
+ * api/axios.ts's interceptor), never anything this function sends.
+ * Returns the caller's updated profile (identityStatus refreshed) - no
+ * new token, since this never changes what the caller is authenticated
+ * AS, only a status field on their own account.
+ */
+export async function reverifyIdentity(): Promise<AuthUser> {
+  try {
+    const response = await apiClient.post<AuthUser>('/auth/identity/reverify');
+
+    if (!isAuthUserProfileShape(response.data)) {
+      throw new ApiError('Unexpected response from the server. Please try again.', null, [], false);
+    }
+
+    return response.data;
+  } catch (error) {
+    if (error instanceof ApiError) {
+      throw error;
+    }
+
+    throw toApiError(error);
   }
 }
 

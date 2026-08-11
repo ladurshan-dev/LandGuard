@@ -15,7 +15,10 @@ import {
 } from '@mui/material';
 import { DashboardLayout } from '../../../layouts/DashboardLayout';
 import { useAuth } from '../../../hooks/useAuth';
+import { SellerIdentityStatusBanner } from '../../../components/seller/SellerIdentityStatusBanner';
+import { DeedDocumentUpload } from '../../../components/property/DeedDocumentUpload';
 import { createProperty, getPropertyById, updateProperty } from '../../../services/propertyService';
+import { verifyDeed } from '../../../services/deedVerificationService';
 import { ApiError } from '../../../utils/apiError';
 
 /**
@@ -30,6 +33,10 @@ const LOCATION_MAX_LENGTH = 255;
 const DISTRICT_MAX_LENGTH = 100;
 const DEED_REFERENCE_MAX_LENGTH = 100;
 const DESCRIPTION_MAX_LENGTH = 4000;
+const OWNER_NAME_MAX_LENGTH = 150;
+const OWNER_ADDRESS_MAX_LENGTH = 255;
+/** Mirrors the backend's AuthValidationRules.NicPattern - old format: 9 digits + V/X; new format: 12 digits. */
+const OWNER_NIC_PATTERN = /^([0-9]{9}[VvXx]|[0-9]{12})$/;
 
 interface PropertyFormValues {
   title: string;
@@ -41,6 +48,9 @@ interface PropertyFormValues {
   size: string;
   price: string;
   deedReference: string;
+  ownerName: string;
+  ownerNic: string;
+  ownerAddress: string;
   regeocodeLocation: boolean;
 }
 
@@ -54,6 +64,9 @@ const EMPTY_DEFAULTS: PropertyFormValues = {
   size: '',
   price: '',
   deedReference: '',
+  ownerName: '',
+  ownerNic: '',
+  ownerAddress: '',
   regeocodeLocation: false,
 };
 
@@ -74,6 +87,18 @@ export default function PropertyFormPage() {
   const [isLoadingExisting, setIsLoadingExisting] = useState(isEditMode);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Deed upload (Phase D) - CREATE mode only. EDIT mode deliberately has no
+  // deed upload here at all: this project has no way yet to know whether a
+  // property already has a verified deed on file, so re-requiring one on
+  // every edit would either force a pointless re-upload or silently
+  // overwrite a perfectly good past verification - neither is safe to
+  // invent. An optional "Replace / Re-verify Deed" action belongs on
+  // SellerPropertyDetailsPage instead, where the seller can already see
+  // whether a verification exists before deciding to replace it.
+  const [selectedDeedFile, setSelectedDeedFile] = useState<File | null>(null);
+  const [deedFileError, setDeedFileError] = useState<string | null>(null);
+  const [submitPhase, setSubmitPhase] = useState<'idle' | 'creating' | 'verifying'>('idle');
 
   const {
     register,
@@ -118,6 +143,9 @@ export default function PropertyFormPage() {
             size: detail.listing.size.toString(),
             price: detail.listing.price.toString(),
             deedReference: detail.listing.deedReference ?? '',
+            ownerName: detail.listing.ownerName ?? '',
+            ownerNic: detail.listing.ownerNic ?? '',
+            ownerAddress: detail.listing.ownerAddress ?? '',
             regeocodeLocation: false,
           });
         }
@@ -141,14 +169,44 @@ export default function PropertyFormPage() {
     return null;
   }
 
+  // Seller Government Identity Verification requirement: blocks the
+  // CREATE form outright for a Pending/Failed Seller, rather than letting
+  // them fill out the whole form only to have the submit rejected server-
+  // side. EDIT mode is untouched - identity verification only gates
+  // creating a NEW listing, per this requirement's own scope.
+  if (!isEditMode && user.identityStatus !== 'Verified') {
+    return (
+      <DashboardLayout title="List a Property" user={user}>
+        <SellerIdentityStatusBanner />
+        <Paper variant="outlined" sx={{ p: 4, textAlign: 'center' }}>
+          <Typography color="text.secondary">
+            Your identity must be verified before you can list a property.
+          </Typography>
+          <Button variant="outlined" onClick={() => navigate('/seller/properties')} sx={{ mt: 2 }}>
+            Back to My Properties
+          </Button>
+        </Paper>
+      </DashboardLayout>
+    );
+  }
+
   const onSubmit = async (values: PropertyFormValues) => {
     setSubmitError(null);
+    setDeedFileError(null);
 
     const trimmedDescription = values.description.trim();
     const trimmedDistrict = values.district.trim();
     const trimmedDeedReference = values.deedReference.trim();
+    const trimmedOwnerName = values.ownerName.trim();
+    const trimmedOwnerNic = values.ownerNic.trim();
+    const trimmedOwnerAddress = values.ownerAddress.trim();
     const latitude = values.latitude.trim() === '' ? undefined : Number(values.latitude);
     const longitude = values.longitude.trim() === '' ? undefined : Number(values.longitude);
+
+    if (!isEditMode && !selectedDeedFile) {
+      setDeedFileError('Upload the deed document that proves ownership of this property before listing it.');
+      return;
+    }
 
     try {
       if (isEditMode && propertyId !== null) {
@@ -169,10 +227,21 @@ export default function PropertyFormPage() {
           size: Number(values.size),
           price: Number(values.price),
           deedReference: trimmedDeedReference === '' ? undefined : trimmedDeedReference,
+          ownerName: trimmedOwnerName === '' ? undefined : trimmedOwnerName,
+          ownerNic: trimmedOwnerNic === '' ? undefined : trimmedOwnerNic,
+          ownerAddress: trimmedOwnerAddress === '' ? undefined : trimmedOwnerAddress,
           regeocodeLocation: values.regeocodeLocation,
         });
         navigate(`/seller/properties/${propertyId}`);
       } else {
+        // Two-step orchestration (Phase D): the existing property-create
+        // API stays JSON-only (CreatePropertyRequest is unchanged), so the
+        // deed is uploaded as a second request once the real PropertyID is
+        // known, using the existing POST /api/deed-verification/{id}
+        // multipart endpoint - not a new combined multipart create
+        // endpoint. The property is created first and is Pending either
+        // way; nothing below can undo that.
+        setSubmitPhase('creating');
         const created = await createProperty({
           title: values.title.trim(),
           description: trimmedDescription === '' ? undefined : trimmedDescription,
@@ -182,14 +251,45 @@ export default function PropertyFormPage() {
           longitude,
           size: Number(values.size),
           price: Number(values.price),
-          deedReference: trimmedDeedReference === '' ? undefined : trimmedDeedReference,
+          deedReference: trimmedDeedReference,
+          ownerName: trimmedOwnerName,
+          ownerNic: trimmedOwnerNic,
+          ownerAddress: trimmedOwnerAddress,
         });
-        navigate(`/seller/properties/${created.propertyId}`);
+
+        setSubmitPhase('verifying');
+        try {
+          await verifyDeed(created.propertyId, selectedDeedFile!);
+          navigate(`/seller/properties/${created.propertyId}`);
+        } catch {
+          // The property (e.g. #34) already exists and stays Pending
+          // regardless of this failure - never deleted, never approved or
+          // rejected automatically, and never navigated to /0. The seller
+          // lands on their new property's own details page instead, which
+          // reports the failure and offers a Retry Deed Verification
+          // action (see SellerPropertyDetailsPage's handling of this
+          // navigation state) rather than silently losing the failure here.
+          navigate(`/seller/properties/${created.propertyId}`, {
+            state: { deedVerificationFailed: true },
+          });
+        }
       }
     } catch (error) {
       setSubmitError(error instanceof ApiError ? error.message : 'Something went wrong. Please try again.');
+    } finally {
+      setSubmitPhase('idle');
     }
   };
+
+  const submitButtonLabel = isSubmitting
+    ? submitPhase === 'verifying'
+      ? 'Verifying deed...'
+      : isEditMode
+        ? 'Saving...'
+        : 'Creating property...'
+    : isEditMode
+      ? 'Save Changes'
+      : 'List Property';
 
   return (
     <DashboardLayout title={isEditMode ? 'Edit Property' : 'List a Property'} user={user} maxWidth="md">
@@ -338,18 +438,95 @@ export default function PropertyFormPage() {
               <Grid size={12}>
                 <TextField
                   {...register('deedReference', {
+                    required: 'Deed Number is required.',
                     maxLength: {
                       value: DEED_REFERENCE_MAX_LENGTH,
-                      message: `Deed reference must be at most ${DEED_REFERENCE_MAX_LENGTH} characters.`,
+                      message: `Deed Number must be at most ${DEED_REFERENCE_MAX_LENGTH} characters.`,
                     },
                   })}
-                  label="Deed Reference (optional)"
+                  label="Deed Number"
                   fullWidth
                   disabled={isSubmitting}
                   error={Boolean(errors.deedReference)}
                   helperText={errors.deedReference?.message}
                 />
               </Grid>
+
+              <Grid size={12}>
+                <Typography variant="subtitle2" sx={{ mt: 1 }}>
+                  Deed Owner Details
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  The registered owner information on the deed - this is checked against the deed document you
+                  upload, and must match it exactly.
+                </Typography>
+              </Grid>
+
+              <Grid size={12}>
+                <TextField
+                  {...register('ownerName', {
+                    required: 'Owner Name is required.',
+                    maxLength: {
+                      value: OWNER_NAME_MAX_LENGTH,
+                      message: `Owner Name must be at most ${OWNER_NAME_MAX_LENGTH} characters.`,
+                    },
+                  })}
+                  label="Owner Name"
+                  fullWidth
+                  disabled={isSubmitting}
+                  error={Boolean(errors.ownerName)}
+                  helperText={errors.ownerName?.message}
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  {...register('ownerNic', {
+                    required: 'Owner NIC is required.',
+                    pattern: {
+                      value: OWNER_NIC_PATTERN,
+                      message: 'Enter a valid Sri Lankan NIC (9 digits followed by V or X, or 12 digits).',
+                    },
+                  })}
+                  label="Owner NIC"
+                  fullWidth
+                  disabled={isSubmitting}
+                  error={Boolean(errors.ownerNic)}
+                  helperText={errors.ownerNic?.message}
+                />
+              </Grid>
+
+              <Grid size={{ xs: 12, sm: 6 }}>
+                <TextField
+                  {...register('ownerAddress', {
+                    required: 'Owner Address is required.',
+                    maxLength: {
+                      value: OWNER_ADDRESS_MAX_LENGTH,
+                      message: `Owner Address must be at most ${OWNER_ADDRESS_MAX_LENGTH} characters.`,
+                    },
+                  })}
+                  label="Owner Address"
+                  fullWidth
+                  disabled={isSubmitting}
+                  error={Boolean(errors.ownerAddress)}
+                  helperText={errors.ownerAddress?.message}
+                />
+              </Grid>
+
+              {!isEditMode && (
+                <Grid size={12}>
+                  <DeedDocumentUpload
+                    selectedFile={selectedDeedFile}
+                    onFileSelected={(file) => {
+                      setSelectedDeedFile(file);
+                      setDeedFileError(null);
+                    }}
+                    onRemove={() => setSelectedDeedFile(null)}
+                    disabled={isSubmitting}
+                    error={deedFileError}
+                  />
+                </Grid>
+              )}
 
               {isEditMode && (
                 <Grid size={12}>
@@ -368,7 +545,7 @@ export default function PropertyFormPage() {
                 disabled={isSubmitting}
                 startIcon={isSubmitting ? <CircularProgress size={18} color="inherit" /> : undefined}
               >
-                {isSubmitting ? 'Saving...' : isEditMode ? 'Save Changes' : 'List Property'}
+                {submitButtonLabel}
               </Button>
               <Button variant="text" disabled={isSubmitting} onClick={() => navigate(-1)}>
                 Cancel

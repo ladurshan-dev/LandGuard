@@ -1,10 +1,103 @@
 # LandGuard — The 8-Point Fraud Detection Engine
 
+> **PHASE C UPDATE — read this before the rest of the document.**
+> RiskScore / RiskLevel / FraudStatus, as calculated below, are **supporting
+> risk indicators only**. They inform an administrator's review; they do
+> **not** decide whether a listing goes live. `dbo.Property.Status` is
+> changed only by:
+> 1. `usp_Property_Create` / `usp_Property_Update` — set/reset to `Pending`.
+> 2. `usp_Admin_ApproveProperty` / `usp_Admin_RejectProperty` — the only
+>    procedures that set `Approved` or `Rejected`, called from
+>    `POST /api/admin/properties/{id}/approve|reject`.
+>
+> Government Deed Verification (separate module, see
+> `Module5B_DeedVerification.sql` / `GovernmentDeedVerificationService`) is
+> the authoritative mechanism for deed authenticity and also does not set
+> `Property.Status` — it records a verification result for the admin to
+> consider alongside the risk indicators below.
+>
+> Earlier versions of this engine had `usp_Risk_GenerateReport`
+> auto-transition `Property.Status` to `Approved` (Low risk) or `Flagged`
+> (Medium/High risk) immediately after scoring. That auto-transition has
+> been **removed**. A property now stays `Pending` after fraud analysis,
+> regardless of risk level, until an administrator explicitly approves or
+> rejects it. The `Flagged` status value still exists in the schema and in
+> historical data for backward compatibility, but new analysis runs no
+> longer assign it.
+
+> **PHASE E UPDATE — Supporting Risk Indicator Refactor.**
+> Three roles are now clearly separated, and nothing below changes that:
+> 1. **RiskScore / RiskLevel / FraudStatus** (this document) — the legacy,
+>    supporting listing-risk score. Useful corroboration, never proof of
+>    anything about the deed itself.
+> 2. **Government Deed Verification** (`Module5B_DeedVerification.sql` /
+>    `GovernmentDeedVerificationService`) — the authoritative comparison of
+>    the seller's uploaded deed against the trusted government registry
+>    record (`Verified` / `Fraudulent` / `PriceAnomaly` / `Unverified` /
+>    `UnverifiedCancelled`).
+> 3. **Admin Moderation** (`usp_Admin_ApproveProperty` /
+>    `usp_Admin_RejectProperty`) — the only thing that ever changes
+>    `Property.Status` to `Approved`/`Rejected`, informed by both of the
+>    above but not automated from either.
+>
+> Two changes landed this phase, both additive/backward-compatible:
+>
+> - **`usp_Fraud_AnalyseProperty`, rule 7 (Missing Information)** used to
+>   treat a `NULL Property.DeedReference` as "deed missing" - but
+>   `DeedReference` is an optional free-text field, separate from the
+>   seller's actually-uploaded-and-verified deed document
+>   (`dbo.DeedVerification.SellerDocumentReference`, Phase D). A seller who
+>   uploaded and verified a real deed but left the optional text field
+>   blank was incorrectly flagged as missing their deed. The rule now
+>   treats the deed as present when **either** `DeedReference` is filled in
+>   **or** a `DeedVerification` row exists for the property with a non-null
+>   `SellerDocumentReference`. `DeedReference` itself is unchanged and
+>   still optional. **This makes `usp_Fraud_AnalyseProperty` depend on
+>   `dbo.DeedVerification` existing** (created by
+>   `Module5B_DeedVerification.sql`, applied separately from the six
+>   numbered canonical scripts, same as before) - a fresh
+>   `00_RunAll.sql`-only database can still create this procedure (SQL
+>   Server defers name resolution), it just cannot successfully **run** it
+>   until `Module5B_DeedVerification.sql` has also been applied, the same
+>   dependency the C# backend (`DeedVerificationController` etc.) already
+>   has.
+> - **`GovernmentDeedVerificationService.VerifyAndPersistAsync`** (C#, not
+>   SQL) now re-triggers `usp_Fraud_AnalyseProperty` (via the existing
+>   `IPropertyStoredProcedures.AnalyseAsync` wrapper, the same one Property
+>   Create/Update already call - no new procedure) immediately after a
+>   verification successfully persists. Without this, the very first
+>   `FraudCheck`/`RiskReport` snapshot - taken when the property is
+>   created, before the seller's second-step deed upload has happened yet
+>   (see the Seller Deed PDF Upload workflow) - would still show
+>   `MissingInfoCheck = 1` and never refresh until the seller separately
+>   edited the listing. This call cannot affect `Property.Status` (see the
+>   Phase C note above) and is best-effort: if it fails, the just-persisted
+>   verification result is unaffected, and the risk snapshot simply stays
+>   at its previous value until the next successful analysis run.
+>
+> Also softened (wording only, no rule/weight/threshold change): the
+> summary text and notifications `usp_Risk_GenerateReport` writes no longer
+> say "fraud detection rules"/"fraud indicators"/"HIGH RISK... scored"; they
+> say "risk analysis completed"/"listing risk indicators"/"potential
+> listing concerns detected... review may be required" instead, so they
+> read as supporting-signal language rather than a fraud verdict.
+>
+> On the frontend, `PropertyFraudPanel`/`RiskIndicator` were renamed from
+> "Fraud & Risk Assessment" to **"Supporting Risk Indicators"** and no
+> longer render `FraudStatus` ("Clean"/"Suspicious"/"Fraudulent") as a
+> colored chip anywhere (property cards, review queue, details pages) -
+> that string remains in the API/DB for backward compatibility (nothing
+> below was deleted, renamed, or restructured), it is simply no longer
+> presented as if it were a deed-authenticity verdict. Per-rule point
+> values are hidden from the default Seller/Buyer view and shown only in
+> Admin diagnostics.
+
 Implemented entirely in the database:
 
 - `usp_Fraud_AnalyseProperty` — runs rules 1–7 and writes one `FraudCheck` row
 - `usp_Risk_GenerateReport` — point 8: combines the results into a risk score,
-  bands it, writes the summary, sets the listing status, raises notifications
+  bands it, writes the summary, and notifies the seller. Does **not** change
+  `dbo.Property.Status` (see the Phase C note above).
 
 The API calls `usp_Fraud_AnalyseProperty` on every submission and every
 resubmission, which satisfies NFR04.
@@ -23,7 +116,7 @@ Weights live in `dbo.FraudRuleWeight` and total exactly **100**.
 | 4 | Deed Reference Duplicate | `DEED_DUPLICATE` | 20 | Same `DeedReference` on another `Pending`/`Approved`/`Flagged` listing |
 | 5 | Seller History | `SELLER_HISTORY` | 12 | Seller has ≥ 2 rejected listings, or ≥ 2 resolved reports against their listings |
 | 6 | Location Validation | `LOCATION_INVALID` | 10 | Coordinates NULL, or outside 5.9–9.9 °N / 79.6–81.9 °E |
-| 7 | Missing Information | `MISSING_INFO` | 8 | No deed, description under 30 characters, no images, no district, or seller has no phone |
+| 7 | Missing Information | `MISSING_INFO` | 8 | No deed (neither `DeedReference` text nor a verified `DeedVerification.SellerDocumentReference` - Phase E), description under 30 characters, no images, no district, or seller has no phone |
 | 8 | **Risk Score** | — | **= 100** | Sum of the weights above, capped at 100 |
 
 ### Why these weights
@@ -49,14 +142,22 @@ account rather than this particular listing.
 
 ## Banding (FR05)
 
-| Band | Score | Listing status | What the buyer sees |
+| Band | Score | Effect on admin review | What the buyer sees* |
 |---|---|---|---|
-| **Low** | 0–40 | `Approved` — published automatically | Green badge |
-| **Medium** | 41–70 | `Flagged` — admin review queue | Amber badge |
-| **High** | 71–100 | `Flagged` + alert to every admin | Red badge |
+| **Low** | 0–40 | Listed as low risk in admin review | Green badge |
+| **Medium** | 41–70 | Listed as medium risk in admin review | Amber badge |
+| **High** | 71–100 | Listed as high risk + alert to every admin | Red badge |
+
+\* The badge is only visible once an administrator has approved the listing
+(`Property.Status = 'Approved'`) — the score itself never publishes or
+hides a listing.
 
 The banding is enforced by `CK_RiskReport_Banding`, so an incorrectly banded
 score cannot be written to the database at all.
+
+Every listing, regardless of band, remains `Pending` after fraud analysis
+and waits in the admin review queue until explicitly approved or rejected
+(Phase C — see the note at the top of this document).
 
 ---
 
@@ -77,7 +178,7 @@ usp_Fraud_AnalyseProperty
         ├─ CHECK 4  Deed Duplicate       → Property.DeedReference
         ├─ CHECK 5  Seller History       → rejected listings + resolved reports
         ├─ CHECK 6  Location Validation  → Latitude / Longitude bounding box
-        └─ CHECK 7  Missing Information  → mandatory field completeness
+        └─ CHECK 7  Missing Information  → mandatory field completeness (deed = DeedReference OR verified SellerDocumentReference)
         │
         ▼
    INSERT INTO FraudCheck (7 bit flags)
@@ -89,9 +190,17 @@ usp_Risk_GenerateReport   ◄── POINT 8
         ├─ level  = fn_RiskLevelFromScore(score)
         ├─ summary= bulleted list of every rule that fired
         ├─ INSERT INTO RiskReport
-        ├─ UPDATE Property.Status  (Low → Approved, otherwise Flagged)
-        ├─ NOTIFY seller
+        ├─ NOTIFY seller ("pending admin review")
         └─ NOTIFY all admins if High
+        │
+        ▼
+   Property.Status remains 'Pending' (unchanged by this procedure)
+        │
+        ▼
+Admin reviews (risk indicators + government deed verification result)
+        │
+        ├─ usp_Admin_ApproveProperty  → Property.Status = 'Approved'
+        └─ usp_Admin_RejectProperty   → Property.Status = 'Rejected'
 ```
 
 ---
@@ -102,7 +211,10 @@ usp_Risk_GenerateReport   ◄── POINT 8
 
 Verified seller with a phone number, complete description, deed reference,
 images, valid Colombo coordinates, priced at the district benchmark.
-No rule fires. Published automatically.
+No rule fires. Seed data records this property as already `Approved` (an
+administrator reviewed and approved it) — under the current engine, a Low
+score no longer approves a listing by itself; every listing waits for
+admin approval regardless of score.
 
 ### Property 28 — score 70 (Medium, upper boundary)
 

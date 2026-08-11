@@ -13,13 +13,15 @@ internal static class PropertyValidationRules
     public const int LocationMaxLength = 255;      // Property.Location NVARCHAR(255)
     public const int DistrictMaxLength = 100;      // Property.District NVARCHAR(100)
     public const int DeedReferenceMaxLength = 100; // Property.DeedReference VARCHAR(100)
+    public const int OwnerNameMaxLength = 150;     // Property.OwnerName NVARCHAR(150)
+    public const int OwnerAddressMaxLength = 255;  // Property.OwnerAddress NVARCHAR(255)
 
     /// <summary>Not a DB constraint - a defensive application-level cap on free-text Description length.</summary>
     public const int DescriptionMaxLength = 4000;
 
     public static readonly string[] ValidRiskLevels = { "Low", "Medium", "High" };
 
-    public static readonly string[] ValidSortOptions = { "Newest", "PriceAsc", "PriceDesc", "RiskAsc" };
+    public static readonly string[] ValidSortOptions = { "Newest", "Oldest", "PriceAsc", "PriceDesc", "RiskAsc" };
 
     /// <summary>
     /// Mirrors Infrastructure/Services/FileStorageSettings' default -

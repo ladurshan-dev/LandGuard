@@ -1,26 +1,31 @@
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { Navigate, Link as RouterLink, useLocation, useNavigate } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
 import {
   Alert,
   Box,
   Button,
   CircularProgress,
-  Container,
   IconButton,
   InputAdornment,
+  Link,
   Paper,
+  Stack,
   TextField,
   Typography,
 } from '@mui/material';
 import ShieldIcon from '@mui/icons-material/Shield';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
+import LockIcon from '@mui/icons-material/Lock';
+import GppGoodIcon from '@mui/icons-material/GppGood';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import { FullScreenLoader } from '../../components/FullScreenLoader';
 import { useAuth } from '../../hooks/useAuth';
 import { DASHBOARD_PATH_BY_ROLE } from '../../types/auth';
 import type { LoginRequest } from '../../types/auth';
+import { landguardColors } from '../../theme/landguardTheme';
 
 interface LoginFormValues {
   email: string;
@@ -29,14 +34,23 @@ interface LoginFormValues {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** Trust messaging for the brand panel - copy only, no platform statistics or other data that would need to come from the backend. */
+const TRUST_POINTS = [
+  { Icon: LockIcon, label: 'Secure & encrypted access' },
+  { Icon: VerifiedUserIcon, label: 'Verified listings only' },
+  { Icon: GppGoodIcon, label: 'Fraud awareness protection' },
+];
+
 /**
- * The public login screen - the only place credentials are collected.
- * Contains no authentication logic of its own: field-level validation is
- * React Hook Form's job, the actual login call and session persistence
- * are AuthContext's (via useAuth().login), and translating a failure into
- * a safe message is authService's (this component just displays
- * `error.message`). That split is what "do not duplicate authentication
- * logic in LoginPage" means in practice here.
+ * The public login screen - Stage 2 visual redesign (see the attached
+ * design reference approved for this file). Contains no authentication
+ * logic of its own, unchanged from before this redesign: field-level
+ * validation is React Hook Form's job, the actual login call and session
+ * persistence are AuthContext's (via useAuth().login), and translating a
+ * failure into a safe message is authService's (this component just
+ * displays `error.message`). Every hook, validation rule, submit handler
+ * and redirect guard below is identical to the pre-redesign version - only
+ * the JSX around them changed.
  */
 export default function LoginPage() {
   const { login, isAuthenticated, isInitializing, user } = useAuth();
@@ -94,30 +108,128 @@ export default function LoginPage() {
       sx={{
         minHeight: '100vh',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        bgcolor: 'grey.100',
-        px: 2,
+        flexDirection: { xs: 'column', md: 'row' },
+        overflowX: 'hidden',
       }}
     >
-      <Container maxWidth="xs" disableGutters>
-        <Paper elevation={3} sx={{ p: { xs: 3, sm: 4 }, borderRadius: 2 }}>
-          <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 3 }}>
-            <ShieldIcon color="primary" sx={{ fontSize: 40, mb: 1 }} />
-            <Typography variant="h5" component="h1" align="center" sx={{ fontWeight: 600 }}>
-              LandGuard
+      {/* BRAND PANEL - desktop: tall left column with trust messaging; mobile: compact top band. */}
+      <Box
+        sx={{
+          position: 'relative',
+          overflow: 'hidden',
+          flex: { xs: '0 0 auto', md: '1 1 50%' },
+          minHeight: { xs: 200, md: '100vh' },
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: { xs: 'center', md: 'flex-end' },
+          px: { xs: 3, md: 7 },
+          py: { xs: 4, md: 7 },
+          color: '#fff',
+          background: `linear-gradient(135deg, ${landguardColors.green} 0%, ${landguardColors.charcoal} 100%)`,
+        }}
+      >
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: 0,
+            opacity: 0.6,
+            background: `radial-gradient(circle at 15% 20%, ${landguardColors.greenLight}55, transparent 45%), radial-gradient(circle at 85% 85%, ${landguardColors.gold}33, transparent 40%)`,
+            pointerEvents: 'none',
+          }}
+        />
+
+        <Box sx={{ position: 'relative' }}>
+          <Box
+            sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 1,
+              bgcolor: 'rgba(200,146,42,0.20)',
+              border: '1px solid rgba(200,146,42,0.4)',
+              color: landguardColors.goldLight,
+              px: 2,
+              py: 0.75,
+              borderRadius: 5,
+              fontSize: 12,
+              fontWeight: 600,
+              mb: { xs: 2, md: 3 },
+            }}
+          >
+            <ShieldIcon sx={{ fontSize: 16 }} />
+            LandGuard &middot; Sri Lanka
+          </Box>
+
+          <Typography
+            variant="h3"
+            component="h1"
+            sx={{ fontWeight: 400, lineHeight: 1.15, mb: { xs: 1, md: 2 }, fontSize: { xs: 26, md: 40 } }}
+          >
+            Safe Land Transactions
+            <Box component="span" sx={{ display: 'block', color: landguardColors.goldLight, fontStyle: 'italic' }}>
+              for Everyone.
+            </Box>
+          </Typography>
+
+          <Typography
+            sx={{
+              display: { xs: 'none', md: 'block' },
+              color: 'rgba(255,255,255,0.72)',
+              maxWidth: 380,
+              lineHeight: 1.7,
+              mb: 4,
+            }}
+          >
+            Helping buyers and sellers connect with trust and transparency across Sri Lanka.
+          </Typography>
+
+          <Stack spacing={1.25} sx={{ display: { xs: 'none', md: 'flex' } }}>
+            {TRUST_POINTS.map(({ Icon, label }) => (
+              <Box key={label} sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+                <Icon sx={{ fontSize: 18, color: landguardColors.goldLight }} />
+                <Typography variant="body2" sx={{ color: 'rgba(255,255,255,0.82)' }}>
+                  {label}
+                </Typography>
+              </Box>
+            ))}
+          </Stack>
+        </Box>
+      </Box>
+
+      {/* FORM PANEL - unchanged authentication logic, redesigned presentation. */}
+      <Box
+        sx={{
+          flex: { xs: '1 1 auto', md: '1 1 50%' },
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: 'background.default',
+          px: { xs: 2.5, md: 4 },
+          py: { xs: 4, md: 6 },
+        }}
+      >
+        <Paper
+          elevation={0}
+          sx={{
+            width: '100%',
+            maxWidth: 440,
+            p: { xs: 3, sm: 5 },
+            border: '1px solid',
+            borderColor: 'divider',
+            borderRadius: 4,
+          }}
+        >
+          <Box sx={{ textAlign: 'center', mb: 3.5 }}>
+            <ShieldIcon color="primary" sx={{ fontSize: 38, mb: 1 }} />
+            <Typography variant="h5" component="h2" sx={{ fontWeight: 400 }}>
+              Welcome Back
             </Typography>
-            <Typography variant="body2" color="text.secondary" align="center">
-              Land Deed Fraud Detection System
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+              Sign in to your account
             </Typography>
           </Box>
 
-          <Typography variant="subtitle1" component="h2" sx={{ mb: 2 }}>
-            Sign in to your account
-          </Typography>
-
           {submitError && (
-            <Alert severity="error" role="alert" sx={{ mb: 2 }}>
+            <Alert severity="error" role="alert" sx={{ mb: 2.5 }}>
               {submitError}
             </Alert>
           )}
@@ -174,14 +286,21 @@ export default function LoginPage() {
               fullWidth
               size="large"
               disabled={isSubmitting}
-              sx={{ mt: 3, py: 1.25 }}
+              sx={{ mt: 3, py: 1.4 }}
               startIcon={isSubmitting ? <CircularProgress size={18} color="inherit" /> : undefined}
             >
               {isSubmitting ? 'Signing in...' : 'Sign in'}
             </Button>
+
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 2.5, textAlign: 'center' }}>
+              Don&apos;t have an account?{' '}
+              <Link component={RouterLink} to="/register" underline="hover">
+                Create account
+              </Link>
+            </Typography>
           </Box>
         </Paper>
-      </Container>
+      </Box>
     </Box>
   );
 }

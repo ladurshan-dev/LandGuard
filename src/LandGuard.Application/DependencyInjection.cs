@@ -34,6 +34,9 @@ public static class DependencyInjection
 
         services.AddScoped<IAuthService, AuthService>();
 
+        // Seller Government Identity Verification requirement.
+        services.AddScoped<ISellerIdentityVerificationService, SellerIdentityVerificationService>();
+
         // Module 4 (Property Management).
         services.AddScoped<IPropertyService, PropertyService>();
 
@@ -66,6 +69,14 @@ public static class DependencyInjection
         // IGovernmentDeedFraudDetectionService was in Phase 5A (see that
         // registration's own comment, directly above).
         services.AddScoped<IGovernmentDeedVerificationService, GovernmentDeedVerificationService>();
+
+        // Phase B2 (Admin Property Moderation API): the manual
+        // approve/reject override path wrapping the existing
+        // usp_Admin_ApproveProperty/usp_Admin_RejectProperty procedures -
+        // see IAdminModerationService's own doc comment for why this
+        // exists alongside, not instead of, the automatic score-driven
+        // Property.Status transition.
+        services.AddScoped<IAdminModerationService, AdminModerationService>();
 
         return services;
     }

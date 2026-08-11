@@ -110,13 +110,13 @@ public class GovernmentDeedVerificationStoredProcedures : IGovernmentDeedVerific
         parameters.Add("@GovernmentRecordStatus", result.GovernmentRecordStatus);
         parameters.Add("@VerificationStatus", result.Status.ToString());
         parameters.Add("@Summary", result.Summary);
-        // Always null as of Phase 5B - GovernmentDeedComparisonReport does
-        // not currently carry the seller's OCR'd document storage
-        // reference through, and this phase was explicitly scoped not to
-        // modify GovernmentDeedComparisonService/GovernmentDeedComparisonReport
-        // to add it. The column exists so a later phase can populate it
-        // without a schema change.
-        parameters.Add("@SellerDocumentReference", (string?)null);
+        // Phase D: the seller's actual storage reference, carried through
+        // from GovernmentDeedComparisonReport.SellerDocumentReference via
+        // GovernmentDeedFraudDetectionResult.SellerDocumentReference (see
+        // both types' own doc comments). No schema/procedure change needed
+        // here - usp_DeedVerification_Create has always accepted this
+        // parameter; only this call site was hardcoding null.
+        parameters.Add("@SellerDocumentReference", result.SellerDocumentReference);
         parameters.Add("@VerifiedDate", result.GeneratedDate);
         parameters.Add("@NewDeedVerificationID", dbType: DbType.Int32, direction: ParameterDirection.Output);
 

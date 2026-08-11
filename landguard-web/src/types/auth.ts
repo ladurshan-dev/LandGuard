@@ -12,6 +12,15 @@
 /** Matches dbo.Users.Role / UserRoleExtensions.ToDbValue() exactly - "Admin", not "Administrator". */
 export type UserRole = 'Buyer' | 'Seller' | 'Admin';
 
+/**
+ * Seller Government Identity Verification requirement - matches
+ * dbo.Users.IdentityStatus's raw string values exactly. Null for a
+ * Buyer/Admin (an identity check only ever applies to a Seller) or for a
+ * Seller account that predates this requirement and has not yet
+ * registered/reverified.
+ */
+export type IdentityStatus = 'Pending' | 'Verified' | 'Failed' | null;
+
 /** The `user` object nested in POST /api/auth/login's response body. */
 export interface AuthUser {
   userId: number;
@@ -22,6 +31,8 @@ export interface AuthUser {
   phone: string | null;
   nicVerified: boolean;
   isActive: boolean;
+  /** Only meaningful for role === 'Seller' - see IdentityStatus's own doc comment. */
+  identityStatus: IdentityStatus;
   createdAt: string;
 }
 
@@ -38,6 +49,27 @@ export interface LoginResponse {
   user: AuthUser;
 }
 
+/**
+ * POST /api/auth/register's request body - mirrors the backend's
+ * RegisterRequest exactly. `role` is a plain field here (not implied by a
+ * separate endpoint per role) - the backend re-validates it server-side
+ * regardless of what is sent, so this type existing doesn't grant the
+ * frontend any authority over it; it only shapes what RegisterPage submits.
+ */
+export interface RegisterRequest {
+  fullName: string;
+  email: string;
+  password: string;
+  confirmPassword: string;
+  /** Buyer or Seller only - Register never offers Admin as a choice. */
+  role: Extract<UserRole, 'Buyer' | 'Seller'>;
+  /** Required when role is 'Seller'; omitted (or ignored if sent) for 'Buyer'. */
+  nic?: string;
+}
+
+/** POST /api/auth/register's response body - identical shape to LoginResponse (register logs the new account straight in). */
+export type RegisterResponse = LoginResponse;
+
 /** What useAuth()/AuthContext exposes to the rest of the app. */
 export interface AuthContextValue {
   /** The logged-in user, or null when signed out. */
@@ -49,6 +81,10 @@ export interface AuthContextValue {
   /** Derived convenience flag - true whenever both an accessToken and a user are present. */
   isAuthenticated: boolean;
   login: (credentials: LoginRequest) => Promise<AuthUser>;
+  /** Registers a new Buyer or Seller account and, on success, logs it straight in exactly like login() does (same session persistence, same return shape) - see authService.register's doc comment for why. */
+  register: (request: RegisterRequest) => Promise<AuthUser>;
+  /** Seller Government Identity Verification requirement - re-runs the identity check for the signed-in Seller and updates the cached user (identityStatus only; the JWT/session itself is untouched, no new token is issued). */
+  reverifyIdentity: () => Promise<AuthUser>;
   logout: () => void;
   /** True if a user is logged in AND their role is one of the given roles - the one place "is this user allowed here" is decided, so ProtectedRoute/pages never compare `user.role === '...'` directly. */
   hasRole: (...roles: UserRole[]) => boolean;

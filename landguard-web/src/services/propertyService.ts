@@ -6,9 +6,31 @@ import type {
   PropertyListingResult,
   PropertySearchRequest,
   PropertySearchResponse,
+  SellerContactInfo,
   UpdatePropertyRequest,
   UploadPropertyImageRequest,
 } from '../types/property';
+
+/**
+ * POST /api/properties/{id}/withdraw (RequireSeller policy - ownership and
+ * the allowed source states (Pending/Approved only) are enforced by
+ * usp_Property_Withdraw itself, surfaced as a 400 via toApiError on a
+ * mismatched owner or a disallowed source state). This is the Seller-facing
+ * replacement for "Delete" (Phase F, Property Withdrawal / Soft Delete):
+ * the listing's Status becomes "Withdrawn" - it is never physically
+ * deleted, and its DeedVerification/FraudCheck/RiskReport history is fully
+ * preserved. deleteProperty below is unchanged and is now an Admin-only
+ * hard-delete/cleanup action, not something the Seller UI calls anymore.
+ */
+export async function withdrawProperty(propertyId: number): Promise<PropertyListingResult> {
+  try {
+    const response = await apiClient.post<PropertyListingResult>(`/properties/${propertyId}/withdraw`);
+
+    return response.data;
+  } catch (error) {
+    throw toApiError(error);
+  }
+}
 
 /**
  * The data-access layer for Property Management - HTTP calls only, same
@@ -177,5 +199,25 @@ export async function deletePropertyImage(propertyId: number, imageId: number): 
     return response.data;
   } catch (error) {
     throw toApiError(error, { statusMessages: { 404: 'Image not found.' } });
+  }
+}
+
+/**
+ * GET /api/properties/{id}/seller-contact (RequireBuyer policy - Contact
+ * Seller workflow). Returns the Seller's name/phone/email/verified badge
+ * only for a currently-Approved property; PropertyService.GetSellerContactAsync
+ * returns the same generic "not found" for a Pending/Flagged/Rejected/
+ * Disapproved/Withdrawn property as for a nonexistent one, surfaced here as
+ * a 404 exactly like getPropertyById above. Called only when the Buyer
+ * explicitly clicks "Contact Seller" - never on page load, and the result
+ * is never persisted to localStorage/sessionStorage by the caller.
+ */
+export async function getSellerContact(propertyId: number): Promise<SellerContactInfo> {
+  try {
+    const response = await apiClient.get<SellerContactInfo>(`/properties/${propertyId}/seller-contact`);
+
+    return response.data;
+  } catch (error) {
+    throw toApiError(error, { statusMessages: { 404: 'Seller contact information is not available for this property.' } });
   }
 }

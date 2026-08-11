@@ -40,7 +40,7 @@ public class PropertyController : ControllerBase
     [AllowAnonymous]
     public async Task<IActionResult> Search([FromQuery] PropertySearchRequest request, CancellationToken cancellationToken)
     {
-        var result = await _propertyService.SearchAsync(request, cancellationToken);
+        var result = await _propertyService.SearchAsync(request, _currentUserService.Role, cancellationToken);
 
         return result.Succeeded
             ? Ok(result.Data)
@@ -157,6 +157,88 @@ public class PropertyController : ControllerBase
 
         return result.Succeeded
             ? NoContent()
+            : NotFound(new { errors = result.Errors });
+    }
+
+    /// <summary>
+    /// POST /api/properties/{id}/withdraw - Seller only (Phase F, Property
+    /// Withdrawal / Soft Delete). This is the Seller-facing replacement for
+    /// "Delete": it sets Status to "Withdrawn" instead of physically
+    /// deleting the row, so DeedVerification/FraudCheck/RiskReport/
+    /// AdminAction/Notification history is fully preserved. Ownership and
+    /// the allowed source states (Pending/Approved only) are enforced by
+    /// usp_Property_Withdraw itself, exactly like Update above. SellerId
+    /// always comes from the caller's JWT, never the request body.
+    /// DELETE /api/properties/{id} above is unchanged and remains an
+    /// Admin-only hard-delete/cleanup path.
+    /// </summary>
+    [HttpPost("{id:int}/withdraw")]
+    [Authorize(Policy = AuthorizationPolicies.RequireSeller)]
+    public async Task<IActionResult> Withdraw(int id, CancellationToken cancellationToken)
+    {
+        var sellerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _propertyService.WithdrawAsync(id, sellerId, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
+
+    /// <summary>
+    /// DELETE /api/properties/{id}/images/{imageId} - owner or Admin,
+    /// enforced by PropertyService.DeleteImageAsync itself (the database
+    /// has no ownership check for this sub-resource, exactly like
+    /// AddImage above, so this is the one place it's actually checked).
+    /// Deletes the PropertyImage row, the physical file, promotes a new
+    /// Primary image if the deleted one was Primary, and re-runs the fraud
+    /// engine - then returns the refreshed PropertyDetail so the caller's
+    /// gallery can be replaced in one round trip without a second request.
+    /// </summary>
+    [HttpDelete("{id:int}/images/{imageId:int}")]
+    [Authorize]
+    public async Task<IActionResult> DeleteImage(int id, int imageId, CancellationToken cancellationToken)
+    {
+        var callerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _propertyService.DeleteImageAsync(id, imageId, callerId, _currentUserService.Role, cancellationToken);
+
+        // BadRequest for every failure, matching AddImage above (its
+        // sibling operation on this exact sub-resource) - "not found",
+        // "not yours" and "image not found" are all plain Result.Failure
+        // outcomes here, not exceptions, so there is no distinguishing
+        // status code to pick between them.
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
+
+    /// <summary>
+    /// GET /api/properties/{id}/seller-contact - Contact Seller workflow.
+    /// Buyer-only (RequireBuyer - deliberately excludes Seller/Admin, who
+    /// have no legitimate need for this Buyer-facing endpoint; a Seller
+    /// caller gets the standard 403 the policy already produces). Returns
+    /// the smallest possible DTO (SellerName/Phone/Email/VerifiedSeller -
+    /// see <see cref="SellerContactInfo"/>) and only once the property is
+    /// currently "Approved" - enforced server-side inside
+    /// <see cref="IPropertyService.GetSellerContactAsync"/>, never trusted
+    /// from the frontend. A Pending/Flagged/Rejected/Disapproved/Withdrawn
+    /// property, or a nonexistent one, both 404 with the same generic
+    /// message, so this endpoint cannot be used to probe a listing's status.
+    /// </summary>
+    [HttpGet("{id:int}/seller-contact")]
+    [Authorize(Policy = AuthorizationPolicies.RequireBuyer)]
+    public async Task<IActionResult> GetSellerContact(int id, CancellationToken cancellationToken)
+    {
+        var buyerId = _currentUserService.UserId
+                       ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _propertyService.GetSellerContactAsync(id, buyerId, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
             : NotFound(new { errors = result.Errors });
     }
 }

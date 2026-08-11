@@ -24,20 +24,27 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import { Link as RouterLink } from 'react-router-dom';
 import { DashboardLayout } from '../../../layouts/DashboardLayout';
 import { useAuth } from '../../../hooks/useAuth';
+import { SellerIdentityStatusBanner } from '../../../components/seller/SellerIdentityStatusBanner';
 import { PropertyStatusChip } from '../../../components/property/PropertyStatusChip';
 import { RiskIndicator } from '../../../components/property/RiskIndicator';
-import { deleteProperty, getPropertiesBySeller } from '../../../services/propertyService';
+import { getPropertiesBySeller, withdrawProperty } from '../../../services/propertyService';
 import { formatCurrency, formatSize } from '../../../utils/format';
 import { ApiError } from '../../../utils/apiError';
 import type { PropertyListingResult } from '../../../types/property';
 
 /**
- * The seller's own listings - view, create, edit, delete. Deliberately
+ * The seller's own listings - view, create, edit, withdraw. Deliberately
  * its own card layout (not the shared PropertyCard) because every row
- * here needs its own View/Edit/Delete actions, which PropertyCard's
+ * here needs its own View/Edit/Withdraw actions, which PropertyCard's
  * single whole-card click target isn't built for; PropertyCard is reused
  * as-is for the buyer/admin browsing screens where a single click-through
  * is all that's needed.
+ *
+ * Withdrawn listings (Phase F - Property Withdrawal / Soft Delete) stay
+ * visible here with a Withdrawn status chip rather than disappearing, per
+ * the same "seller can still see it, just not manage it" pattern the rest
+ * of this page already uses for read-only history - Edit/Withdraw actions
+ * are hidden for a card that's already Withdrawn.
  */
 export default function SellerPropertiesPage() {
   const { user } = useAuth();
@@ -45,9 +52,9 @@ export default function SellerPropertiesPage() {
   const [listings, setListings] = useState<PropertyListingResult[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [pendingDeleteId, setPendingDeleteId] = useState<number | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [pendingWithdrawId, setPendingWithdrawId] = useState<number | null>(null);
+  const [isWithdrawing, setIsWithdrawing] = useState(false);
+  const [withdrawError, setWithdrawError] = useState<string | null>(null);
 
   // Promise-chained rather than async/await on purpose: the "no setState
   // synchronously reachable from an effect" compiler lint rule treats an
@@ -80,27 +87,40 @@ export default function SellerPropertiesPage() {
     return null;
   }
 
-  const handleConfirmDelete = async () => {
-    if (pendingDeleteId === null) {
+  // Seller Government Identity Verification requirement: server-side is
+  // the real enforcement (PropertyService.CreateAsync/usp_Property_Create
+  // both reject it independently of this) - disabling here is purely so a
+  // Pending/Failed Seller sees why, via SellerIdentityStatusBanner, rather
+  // than a confusing failed submit after filling out the whole form.
+  const canListProperty = user.identityStatus === 'Verified';
+
+  const handleConfirmWithdraw = async () => {
+    if (pendingWithdrawId === null) {
       return;
     }
 
-    setIsDeleting(true);
-    setDeleteError(null);
+    setIsWithdrawing(true);
+    setWithdrawError(null);
 
     try {
-      await deleteProperty(pendingDeleteId);
-      setListings((current) => current.filter((listing) => listing.propertyId !== pendingDeleteId));
-      setPendingDeleteId(null);
+      await withdrawProperty(pendingWithdrawId);
+      // Re-fetch from the backend rather than patching the card locally -
+      // this is the same "don't fake it client-side" rule
+      // SellerPropertyDetailsPage's withdraw flow follows, and it means the
+      // card picks up its real Withdrawn status (and anything else the
+      // procedure changed) instead of a guessed partial update.
+      loadListings(user.userId);
+      setPendingWithdrawId(null);
     } catch (error) {
-      setDeleteError(error instanceof ApiError ? error.message : 'Something went wrong. Please try again.');
+      setWithdrawError(error instanceof ApiError ? error.message : 'Something went wrong. Please try again.');
     } finally {
-      setIsDeleting(false);
+      setIsWithdrawing(false);
     }
   };
 
   return (
     <DashboardLayout title="My Properties" user={user} maxWidth="lg">
+      <SellerIdentityStatusBanner />
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h5" component="h1">
           My Properties
@@ -110,6 +130,7 @@ export default function SellerPropertiesPage() {
           startIcon={<AddIcon />}
           component={RouterLink}
           to="/seller/properties/new"
+          disabled={!canListProperty}
         >
           List a Property
         </Button>
@@ -133,6 +154,7 @@ export default function SellerPropertiesPage() {
             startIcon={<AddIcon />}
             component={RouterLink}
             to="/seller/properties/new"
+            disabled={!canListProperty}
             sx={{ mt: 2 }}
           >
             List your first property
@@ -163,9 +185,17 @@ export default function SellerPropertiesPage() {
                   </Typography>
 
                   <Box sx={{ mt: 1 }}>
+                    {/*
+                      Non-null assertions: riskLevel/fraudStatus are only
+                      ever null when the backend redacted them for a
+                      non-owner, non-Admin (Buyer) caller - see
+                      PropertyListingResult.riskScore's doc comment. This
+                      grid is GetBySellerAsync, always the signed-in
+                      seller's own listings - never redacted.
+                    */}
                     <RiskIndicator
-                      riskLevel={listing.riskLevel}
-                      fraudStatus={listing.fraudStatus}
+                      riskLevel={listing.riskLevel!}
+                      fraudStatus={listing.fraudStatus!}
                       riskScore={listing.riskScore}
                     />
                   </Box>
@@ -180,27 +210,31 @@ export default function SellerPropertiesPage() {
                         <VisibilityIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
-                    <Tooltip title="Edit">
-                      <IconButton
-                        component={RouterLink}
-                        to={`/seller/properties/${listing.propertyId}/edit`}
-                        size="small"
-                      >
-                        <EditIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="small"
-                        color="error"
-                        onClick={() => {
-                          setDeleteError(null);
-                          setPendingDeleteId(listing.propertyId);
-                        }}
-                      >
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
+                    {listing.status !== 'Withdrawn' && (
+                      <Tooltip title="Edit">
+                        <IconButton
+                          component={RouterLink}
+                          to={`/seller/properties/${listing.propertyId}/edit`}
+                          size="small"
+                        >
+                          <EditIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                    {listing.status !== 'Withdrawn' && (
+                      <Tooltip title="Withdraw listing">
+                        <IconButton
+                          size="small"
+                          color="error"
+                          onClick={() => {
+                            setWithdrawError(null);
+                            setPendingWithdrawId(listing.propertyId);
+                          }}
+                        >
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                   </Box>
                 </CardContent>
               </Card>
@@ -209,30 +243,30 @@ export default function SellerPropertiesPage() {
         </Grid>
       )}
 
-      <Dialog open={pendingDeleteId !== null} onClose={() => setPendingDeleteId(null)}>
-        <DialogTitle>Delete this property?</DialogTitle>
+      <Dialog open={pendingWithdrawId !== null} onClose={() => setPendingWithdrawId(null)}>
+        <DialogTitle>Withdraw this listing?</DialogTitle>
         <DialogContent>
           <DialogContentText>
-            This permanently removes the listing and cannot be undone.
+            This removes the property from active review/browsing but keeps its verification and audit history.
           </DialogContentText>
-          {deleteError && (
+          {withdrawError && (
             <Alert severity="error" sx={{ mt: 2 }}>
-              {deleteError}
+              {withdrawError}
             </Alert>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setPendingDeleteId(null)} disabled={isDeleting}>
+          <Button onClick={() => setPendingWithdrawId(null)} disabled={isWithdrawing}>
             Cancel
           </Button>
           <Button
             color="error"
             variant="contained"
-            onClick={() => void handleConfirmDelete()}
-            disabled={isDeleting}
-            startIcon={isDeleting ? <CircularProgress size={16} color="inherit" /> : undefined}
+            onClick={() => void handleConfirmWithdraw()}
+            disabled={isWithdrawing}
+            startIcon={isWithdrawing ? <CircularProgress size={16} color="inherit" /> : undefined}
           >
-            Delete
+            Withdraw Listing
           </Button>
         </DialogActions>
       </Dialog>

@@ -32,7 +32,10 @@ public interface IPropertyStoredProcedures
         decimal? longitude,
         double size,
         decimal price,
-        string? deedReference,
+        string deedReference,
+        string ownerName,
+        string ownerNic,
+        string ownerAddress,
         CancellationToken cancellationToken = default);
 
     /// <summary>Wraps usp_PropertyImage_Add. Returns the new ImageID.</summary>
@@ -84,6 +87,9 @@ public interface IPropertyStoredProcedures
         double? size,
         decimal? price,
         string? deedReference,
+        string? ownerName,
+        string? ownerNic,
+        string? ownerAddress,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -93,4 +99,106 @@ public interface IPropertyStoredProcedures
     /// otherwise. Returns rows deleted (0 or 1).
     /// </summary>
     Task<int> DeleteAsync(int propertyId, int callerUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_Property_Withdraw (Phase F - Property Withdrawal / Soft
+    /// Delete). Seller-only (never Admin - Admin's cleanup path stays
+    /// <see cref="DeleteAsync"/>). <paramref name="sellerId"/> must be the
+    /// caller's own id, the same rule <see cref="UpdateAsync"/> follows -
+    /// ownership is enforced by the procedure itself. Sets Status to
+    /// "Withdrawn" without touching any child/audit record; a Flagged,
+    /// Rejected, or already-Withdrawn property raises a SqlException
+    /// (translated to 400) with a specific reason instead of silently
+    /// doing nothing.
+    /// </summary>
+    Task<PropertyListingResult> WithdrawAsync(int propertyId, int sellerId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_PropertyImage_Delete. Deliberately no ownership check
+    /// here, mirroring <see cref="AddImageAsync"/> rather than
+    /// <see cref="UpdateAsync"/>/<see cref="WithdrawAsync"/> - the
+    /// procedure itself has none either (see its own header comment),
+    /// because <c>PropertyService.DeleteImageAsync</c> already resolves
+    /// the property + image and enforces "owner or Admin" in C# before
+    /// this is ever called, the same split <c>AddImageAsync</c> uses for
+    /// this exact sub-resource. If <paramref name="imageId"/> doesn't
+    /// belong to <paramref name="propertyId"/>, the procedure RAISERRORs
+    /// ("Image not found") rather than silently affecting zero rows. The
+    /// procedure also reassigns Primary to the oldest remaining image
+    /// when the deleted one was Primary - nothing about that needs to
+    /// surface here, the caller just re-reads the property afterwards.
+    /// </summary>
+    Task DeleteImageAsync(int propertyId, int imageId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_Property_ApplyDeedVerificationOutcome (Mandatory Deed /
+    /// Form-vs-Deed Verification requirement) - the SYSTEM-AUTOMATED
+    /// counterpart to <see cref="IAdminStoredProcedures.ApprovePropertyAsync"/>/
+    /// <c>RejectPropertyAsync</c>. Called only by
+    /// <c>GovernmentDeedVerificationService.VerifyAndPersistAsync</c>, and
+    /// only for a <paramref name="verificationStatus"/> of "Verified",
+    /// "FormMismatch", "Fraudulent" or "PriceAnomaly" - never for
+    /// "Unverified"/"UnverifiedCancelled" (a technical/OCR failure must not
+    /// change Property.Status at all - see that service's own doc
+    /// comment). A Withdrawn property raises a SqlException (translated to
+    /// 400), the same guard <see cref="UpdateAsync"/>/
+    /// <see cref="WithdrawAsync"/> already apply.
+    /// </summary>
+    /// <param name="verificationStatus">DeedVerificationStatus's exact string name - "Verified" | "FormMismatch" | "Fraudulent" | "PriceAnomaly" | "DuplicateProperty".</param>
+    /// <param name="summary">The already-composed, Seller-facing explanation (GovernmentDeedFraudDetectionResult.Summary) - folded into the resulting Notification.Message, never re-derived here.</param>
+    /// <param name="governmentPropertyReference">
+    /// Global Duplicate-Property Prevention requirement: the resolved
+    /// GovernmentLandRecordDto.PropertyReference for this run, if any -
+    /// persisted onto Property.GovernmentPropertyReference in the same
+    /// database write as the status change. Null when no government
+    /// record was resolved at all (FormMismatch/Unverified/UnverifiedCancelled),
+    /// in which case the column is left exactly as it already was
+    /// (ISNULL-coalesce inside usp_Property_ApplyDeedVerificationOutcome).
+    /// </param>
+    /// <returns>
+    /// The refreshed listing, plus EffectiveVerificationStatus - AUDIT-CONSISTENCY
+    /// FIX (post-review, third pass): usp_Property_ApplyDeedVerificationOutcome's
+    /// own concurrency-safe GovernmentPropertyReference check (see that
+    /// procedure's "CONCURRENCY FIX" comment) can silently downgrade a
+    /// "Verified"/"PriceAnomaly" <paramref name="verificationStatus"/> to
+    /// "DuplicateProperty" if this call loses a race for the same
+    /// reference. EffectiveVerificationStatus is what ACTUALLY happened -
+    /// equal to <paramref name="verificationStatus"/> in every case except
+    /// that downgrade. GovernmentDeedVerificationService.VerifyAndPersistAsync
+    /// calls this method BEFORE persisting the DeedVerification audit row
+    /// specifically so it can use this value to correct the audit record
+    /// before writing it, instead of writing it first and risking
+    /// disagreement with the final Property.Status - see that method's own
+    /// "AUDIT-CONSISTENCY FIX" comment.
+    /// </returns>
+    Task<(PropertyListingResult Listing, string EffectiveVerificationStatus)> ApplyDeedVerificationOutcomeAsync(
+        int propertyId, string verificationStatus, string? summary, string? governmentPropertyReference = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_Property_FindByGovernmentPropertyReference (Global
+    /// Duplicate-Property Prevention requirement). Returns the PropertyID
+    /// of a DIFFERENT property already carrying this same
+    /// GovernmentPropertyReference, or null if none - deliberately returns
+    /// only an id, never a Seller name/NIC/email or any other private
+    /// data, so a caller cannot leak another Seller's information even by
+    /// accident.
+    /// </summary>
+    Task<int?> FindPropertyIdByGovernmentPropertyReferenceAsync(
+        string governmentPropertyReference, int excludePropertyId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Wraps usp_Property_MarkPendingForReverification (status-safety
+    /// correction to the Mandatory Deed / Form-vs-Deed Verification
+    /// requirement). Called by
+    /// <c>GovernmentDeedComparisonService.CompareAsync</c> the moment a
+    /// re-verification begins on an already-owned property, immediately
+    /// after that method's own ownership check and before any OCR/I-O that
+    /// could fail - so a currently-Approved property is pulled out of
+    /// Buyer visibility (vw_PublishedProperty only ever returns
+    /// Status = 'Approved') for the duration of the attempt, rather than
+    /// staying stale-Approved if the attempt then fails technically. A
+    /// no-op for every status except Approved - see the underlying
+    /// procedure's own header comment.
+    /// </summary>
+    Task MarkPendingForReverificationAsync(int propertyId, CancellationToken cancellationToken = default);
 }

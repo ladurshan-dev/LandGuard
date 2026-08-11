@@ -1,3 +1,4 @@
+using LandGuard.API.Authorization;
 using LandGuard.Application.Common.Interfaces;
 using LandGuard.Application.DTOs.Auth;
 using Microsoft.AspNetCore.Authorization;
@@ -48,6 +49,23 @@ public class AuthController : ControllerBase
             : BadRequest(new { errors = result.Errors });
     }
 
+    /// <summary>
+    /// POST /api/auth/register - anonymous, self-registration for Buyer or
+    /// Seller (never Admin - see RegisterRequestValidator's Role whitelist
+    /// and AuthService.RegisterAsync's doc comment). Creates the account and
+    /// logs it in immediately, same as register/buyer and register/seller.
+    /// </summary>
+    [HttpPost("register")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Register([FromBody] RegisterRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _authService.RegisterAsync(request, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
+            : BadRequest(new { errors = result.Errors });
+    }
+
     /// <summary>POST /api/auth/login - anonymous. Returns the same generic error for an unknown email or a wrong password.</summary>
     [HttpPost("login")]
     [AllowAnonymous]
@@ -87,6 +105,27 @@ public class AuthController : ControllerBase
 
         return result.Succeeded
             ? NoContent()
+            : BadRequest(new { errors = result.Errors });
+    }
+
+    /// <summary>
+    /// POST /api/auth/identity/reverify - Seller Government Identity
+    /// Verification requirement. Seller-only; the target account always
+    /// comes from the caller's own JWT, never a request body UserID.
+    /// Allowed for a Pending or a Failed Seller - see
+    /// IAuthService.ReverifyIdentityAsync's own doc comment.
+    /// </summary>
+    [HttpPost("identity/reverify")]
+    [Authorize(Policy = AuthorizationPolicies.RequireSeller)]
+    public async Task<IActionResult> ReverifyIdentity(CancellationToken cancellationToken)
+    {
+        var userId = _currentUserService.UserId
+                     ?? throw new UnauthorizedAccessException("No authenticated user on the current request.");
+
+        var result = await _authService.ReverifyIdentityAsync(userId, cancellationToken);
+
+        return result.Succeeded
+            ? Ok(result.Data)
             : BadRequest(new { errors = result.Errors });
     }
 }

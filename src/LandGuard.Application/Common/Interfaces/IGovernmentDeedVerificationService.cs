@@ -46,4 +46,21 @@ public interface IGovernmentDeedVerificationService
         int callerId,
         string? callerRole,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phase D - reads every already-persisted verification run for
+    /// <paramref name="propertyId"/> (newest first), without running a new
+    /// one. Wraps <c>IGovernmentDeedVerificationStoredProcedures.GetHistoryAsync</c>
+    /// (Infrastructure, already fully implemented) with the same
+    /// ownership check <see cref="VerifyAndPersistAsync"/> inherits from
+    /// <c>GovernmentDeedComparisonService.CompareAsync</c> - a Seller may
+    /// only read their own property's verification history, an Admin may
+    /// read any. Throws <c>NotFoundException</c> for a nonexistent
+    /// <paramref name="propertyId"/> and <c>UnauthorizedAccessException</c>
+    /// for a Seller reading another seller's property, matching
+    /// <see cref="VerifyAndPersistAsync"/>'s own exception contract so
+    /// callers (the controller) handle both actions identically.
+    /// </summary>
+    Task<Result<IReadOnlyList<DeedVerificationHistoryEntry>>> GetHistoryAsync(
+        int propertyId, int callerId, string? callerRole, CancellationToken cancellationToken = default);
 }

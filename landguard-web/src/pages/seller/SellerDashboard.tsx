@@ -3,6 +3,7 @@ import HomeWorkIcon from '@mui/icons-material/HomeWork';
 import { Link as RouterLink } from 'react-router-dom';
 import { DashboardLayout } from '../../layouts/DashboardLayout';
 import { useAuth } from '../../hooks/useAuth';
+import { SellerIdentityStatusBanner } from '../../components/seller/SellerIdentityStatusBanner';
 
 /** Fraud reports and OCR-based deed comparison remain placeholders for a later phase; property listing management (Module 4) now links through from here. */
 export default function SellerDashboard() {
@@ -17,6 +18,7 @@ export default function SellerDashboard() {
 
   return (
     <DashboardLayout title="Seller Dashboard" user={user}>
+      <SellerIdentityStatusBanner />
       <Paper sx={{ p: 3 }}>
         <Typography variant="h5" gutterBottom>
           Welcome, {user.name}

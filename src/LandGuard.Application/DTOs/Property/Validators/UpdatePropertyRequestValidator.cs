@@ -1,4 +1,5 @@
 using FluentValidation;
+using LandGuard.Application.DTOs.Auth.Validators;
 
 namespace LandGuard.Application.DTOs.Property.Validators;
 
@@ -44,8 +45,30 @@ public class UpdatePropertyRequestValidator : AbstractValidator<UpdatePropertyRe
             .GreaterThan(0)
             .When(x => x.Price.HasValue);
 
+        // Every field is still optional here (omitting it leaves the
+        // existing value unchanged, matching usp_Property_Update's
+        // ISNULL-coalesce pattern) - but if the caller DOES supply one of
+        // the 4 mandatory ownership/deed fields on an edit, it may not be
+        // blanked out, exactly like Title/Location above.
         RuleFor(x => x.DeedReference)
+            .NotEmpty()
             .MaximumLength(PropertyValidationRules.DeedReferenceMaxLength)
             .When(x => x.DeedReference is not null);
+
+        RuleFor(x => x.OwnerName)
+            .NotEmpty()
+            .MaximumLength(PropertyValidationRules.OwnerNameMaxLength)
+            .When(x => x.OwnerName is not null);
+
+        RuleFor(x => x.OwnerNic)
+            .NotEmpty()
+            .Matches(AuthValidationRules.NicPattern)
+            .WithMessage(AuthValidationRules.NicErrorMessage)
+            .When(x => x.OwnerNic is not null);
+
+        RuleFor(x => x.OwnerAddress)
+            .NotEmpty()
+            .MaximumLength(PropertyValidationRules.OwnerAddressMaxLength)
+            .When(x => x.OwnerAddress is not null);
     }
 }

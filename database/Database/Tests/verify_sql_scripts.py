@@ -32,6 +32,19 @@ ORDER = [
 # T-SQL keywords that follow "dbo." style patterns but are not objects
 RESERVED_AFTER_DOT = set()
 
+# Objects created by a Module*.sql script that is deliberately NOT part of
+# the six canonical, numbered scripts this harness checks (ORDER above) -
+# applied separately/manually, the same way the C# backend already depends
+# on them (e.g. GovernmentDeedVerificationStoredProcedures/
+# DeedVerificationController already require dbo.DeedVerification to exist,
+# regardless of what this static check sees). Referencing one of these from
+# a canonical script is intentional cross-module reuse, not a broken
+# reference - see database/Database/Docs/FraudEngine.md's Phase E note for
+# usp_Fraud_AnalyseProperty's own reference to dbo.DeedVerification.
+EXTERNAL_MODULE_OBJECTS = {
+    "deedverification",  # created by Module5B_DeedVerification.sql
+}
+
 
 def strip_comments(sql: str) -> str:
     sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)
@@ -112,6 +125,8 @@ def main() -> int:
             obj = m.group(1).lower()
             if obj in ("fn_isvalidnic", "fn_riskl", ):
                 pass
+            if obj in EXTERNAL_MODULE_OBJECTS:
+                continue
             if obj not in created:
                 problems.append(f"{name}: references dbo.{m.group(1)} which is never created")
             elif created[obj] > idx:

@@ -47,7 +47,7 @@ public class PropertySearchRequestValidator : AbstractValidator<PropertySearchRe
 
         RuleFor(x => x.SortBy)
             .Must(v => PropertyValidationRules.ValidSortOptions.Contains(v))
-            .WithMessage("SortBy must be one of: Newest, PriceAsc, PriceDesc, RiskAsc.");
+            .WithMessage("SortBy must be one of: Newest, Oldest, PriceAsc, PriceDesc, RiskAsc.");
 
         // PageNumber/PageSize deliberately unvalidated - see PropertySearchRequest's doc comment.
     }

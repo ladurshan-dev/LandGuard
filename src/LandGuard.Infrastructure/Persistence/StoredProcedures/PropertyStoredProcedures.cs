@@ -35,7 +35,10 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         decimal? longitude,
         double size,
         decimal price,
-        string? deedReference,
+        string deedReference,
+        string ownerName,
+        string ownerNic,
+        string ownerAddress,
         CancellationToken cancellationToken = default)
     {
         // usp_Property_Create has an OUTPUT parameter (@NewPropertyID), the
@@ -51,10 +54,43 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         parameters.Add("@Size", size);
         parameters.Add("@Price", price);
         parameters.Add("@DeedReference", deedReference);
+        parameters.Add("@OwnerName", ownerName);
+        parameters.Add("@OwnerNIC", ownerNic);
+        parameters.Add("@OwnerAddress", ownerAddress);
         parameters.Add("@NewPropertyID", dbType: DbType.Int32, direction: ParameterDirection.Output);
 
-        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+        // BUG FIX (PropertyID = 0 on create): usp_Property_Create's own
+        // final statement is "SELECT * FROM dbo.vw_PropertyListing WHERE
+        // PropertyID = @NewPropertyID", but it gets there only after calling
+        // EXEC dbo.usp_Fraud_AnalyseProperty, which itself calls EXEC
+        // dbo.usp_Risk_GenerateReport - and that procedure also SELECTs (the
+        // RiskReport row), as does usp_Fraud_AnalyseProperty's own trailing
+        // "SELECT @FraudCheckID AS FraudCheckID". That makes this a
+        // 3-result-set batch, in this exact order:
+        //   1) RiskReport columns (ReportID, FraudCheckID, RiskScore, ...)
+        //   2) FraudCheckID
+        //   3) the actual property listing row (PropertyListingResult shape)
+        // QuerySingleOrDefaultAsync<PropertyListingResult> (previously used
+        // here) only ever reads the FIRST result set - it was silently
+        // mapping the RiskReport row onto PropertyListingResult, so every
+        // column without a same-named match (PropertyId included) was left
+        // at its default, i.e. PropertyId = 0. QueryMultipleAsync, the same
+        // approach GetByIdAsync already uses below for usp_Property_GetById,
+        // reads each result set in its actual declared order instead. The
+        // first two are read and discarded (they exist only as a side
+        // effect of the inline fraud analysis; a real analysis result is
+        // still returned separately by AnalyseAsync/IPropertyStoredProcedures
+        // whenever a caller actually needs it), and the third and final one
+        // is the property listing this method is meant to return - the real
+        // SCOPE_IDENTITY()-derived PropertyID (already correct in the
+        // stored procedure) finally reaches PropertyListingResult.PropertyId
+        // intact.
+        using var multi = await _executor.QueryMultipleAsync(
             "dbo.usp_Property_Create", parameters, cancellationToken);
+
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // RiskReport row - discarded
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // FraudCheckID - discarded
+        var listing = await multi.ReadSingleOrDefaultAsync<PropertyListingResult>();
 
         return listing!;
     }
@@ -159,6 +195,9 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
         double? size,
         decimal? price,
         string? deedReference,
+        string? ownerName,
+        string? ownerNic,
+        string? ownerAddress,
         CancellationToken cancellationToken = default)
     {
         var parameters = new
@@ -173,15 +212,38 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
             Longitude = longitude,
             Size = size,
             Price = price,
-            DeedReference = deedReference
+            DeedReference = deedReference,
+            OwnerName = ownerName,
+            OwnerNIC = ownerNic,
+            OwnerAddress = ownerAddress
         };
 
         // If sellerId doesn't own propertyId, the procedure RAISERRORs
         // before reaching its final SELECT - Dapper surfaces that as a
         // SqlException here, which this method deliberately does not
         // catch (see IPropertyStoredProcedures.UpdateAsync's doc comment).
-        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+        //
+        // BUG FIX (identical to CreateAsync's above): usp_Property_Update
+        // also calls EXEC dbo.usp_Fraud_AnalyseProperty (which itself calls
+        // EXEC dbo.usp_Risk_GenerateReport) before its own final
+        // "SELECT * FROM dbo.vw_PropertyListing WHERE PropertyID = @PropertyID",
+        // making this the same 3-result-set batch as usp_Property_Create:
+        //   1) RiskReport columns (ReportID, FraudCheckID, RiskScore, ...)
+        //   2) FraudCheckID
+        //   3) the actual property listing row (PropertyListingResult shape)
+        // QuerySingleOrDefaultAsync<PropertyListingResult> only reads the
+        // first result set, so it was mapping the RiskReport row onto
+        // PropertyListingResult - PropertyId (and every other column absent
+        // from that first result set) stayed at its default. QueryMultipleAsync
+        // reads each result set in its actual declared order instead: the
+        // first two are read and discarded, and the third and final one is
+        // the property listing this method is meant to return.
+        using var multi = await _executor.QueryMultipleAsync(
             "dbo.usp_Property_Update", parameters, cancellationToken);
+
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // RiskReport row - discarded
+        await multi.ReadSingleOrDefaultAsync<dynamic>();  // FraudCheckID - discarded
+        var listing = await multi.ReadSingleOrDefaultAsync<PropertyListingResult>();
 
         return listing!;
     }
@@ -197,5 +259,102 @@ public class PropertyStoredProcedures : IPropertyStoredProcedures
             "dbo.usp_Property_Delete", parameters, cancellationToken);
 
         return rowsDeleted;
+    }
+
+    public async Task<PropertyListingResult> WithdrawAsync(int propertyId, int sellerId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { PropertyID = propertyId, SellerID = sellerId };
+
+        // Unlike UpdateAsync, usp_Property_Withdraw does not call
+        // usp_Fraud_AnalyseProperty (withdrawal is a lifecycle change, not
+        // a fraud re-check), so it only ever produces the one final
+        // "SELECT * FROM dbo.vw_PropertyListing" result set -
+        // QuerySingleOrDefaultAsync reads it directly, no QueryMultipleAsync
+        // discard-dance needed here. If sellerId doesn't own propertyId, or
+        // the property is in a state that cannot be withdrawn (Flagged,
+        // Rejected, already Withdrawn), the procedure RAISERRORs before
+        // reaching that SELECT - Dapper surfaces that as a SqlException,
+        // deliberately left uncaught here (see IPropertyStoredProcedures.
+        // WithdrawAsync's doc comment).
+        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+            "dbo.usp_Property_Withdraw", parameters, cancellationToken);
+
+        return listing!;
+    }
+
+    public async Task DeleteImageAsync(int propertyId, int imageId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { PropertyID = propertyId, ImageID = imageId };
+
+        // usp_PropertyImage_Delete has no result set to read - it only
+        // DELETEs/UPDATEs (the delete itself, plus the primary-image
+        // reassignment when applicable) - ExecuteAsync is the same
+        // no-result-set path IStoredProcedureExecutor documents for
+        // exactly this shape. RAISERRORs ("Image not found") before doing
+        // either if imageId doesn't belong to propertyId - Dapper surfaces
+        // that as a SqlException here, deliberately left uncaught (see
+        // IPropertyStoredProcedures.DeleteImageAsync's doc comment).
+        await _executor.ExecuteAsync("dbo.usp_PropertyImage_Delete", parameters, cancellationToken);
+    }
+
+    public async Task<(PropertyListingResult Listing, string EffectiveVerificationStatus)> ApplyDeedVerificationOutcomeAsync(
+        int propertyId, string verificationStatus, string? summary, string? governmentPropertyReference = null, CancellationToken cancellationToken = default)
+    {
+        // AUDIT-CONSISTENCY FIX (post-review, third pass): DynamicParameters
+        // is needed now (the plain anonymous-object parameters this method
+        // used before were sufficient when every parameter was input-only)
+        // because usp_Property_ApplyDeedVerificationOutcome gained an
+        // @EffectiveVerificationStatus OUTPUT parameter - the same reason
+        // usp_Property_Create/usp_User_Register need DynamicParameters for
+        // their own OUTPUT parameters elsewhere in this class/UserStoredProcedures.
+        var parameters = new DynamicParameters();
+        parameters.Add("@PropertyID", propertyId);
+        parameters.Add("@VerificationStatus", verificationStatus);
+        parameters.Add("@Summary", summary);
+        parameters.Add("@GovernmentPropertyReference", governmentPropertyReference);
+        parameters.Add("@EffectiveVerificationStatus", dbType: DbType.String, size: 30, direction: ParameterDirection.Output);
+
+        // usp_Property_ApplyDeedVerificationOutcome does not call
+        // usp_Fraud_AnalyseProperty (it only writes Property.Status plus a
+        // Notification row), so - like WithdrawAsync - it only ever
+        // produces the one final "SELECT * FROM dbo.vw_PropertyListing"
+        // result set; no QueryMultipleAsync discard-dance needed here. A
+        // Withdrawn property or an unrecognised verificationStatus
+        // RAISERRORs before reaching that SELECT - Dapper surfaces that as
+        // a SqlException, deliberately left uncaught (see
+        // IPropertyStoredProcedures.ApplyDeedVerificationOutcomeAsync's own
+        // doc comment).
+        var listing = await _executor.QuerySingleOrDefaultAsync<PropertyListingResult>(
+            "dbo.usp_Property_ApplyDeedVerificationOutcome", parameters, cancellationToken);
+
+        var effectiveVerificationStatus = parameters.Get<string?>("@EffectiveVerificationStatus") ?? verificationStatus;
+
+        return (listing!, effectiveVerificationStatus);
+    }
+
+    public async Task MarkPendingForReverificationAsync(int propertyId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new { PropertyID = propertyId };
+
+        // usp_Property_MarkPendingForReverification has no result set to
+        // read (it only conditionally UPDATEs/INSERTs) - ExecuteAsync is
+        // the same no-result-set path DeleteImageAsync above already uses
+        // for this shape.
+        await _executor.ExecuteAsync("dbo.usp_Property_MarkPendingForReverification", parameters, cancellationToken);
+    }
+
+    public async Task<int?> FindPropertyIdByGovernmentPropertyReferenceAsync(
+        string governmentPropertyReference, int excludePropertyId, CancellationToken cancellationToken = default)
+    {
+        var parameters = new
+        {
+            GovernmentPropertyReference = governmentPropertyReference,
+            ExcludePropertyID = excludePropertyId
+        };
+
+       // Use nullable int so a zero-row result is returned as null,
+// while an actual matching PropertyID is returned as its real value.
+        return await _executor.QuerySingleOrDefaultAsync<int?>(
+            "dbo.usp_Property_FindByGovernmentPropertyReference", parameters, cancellationToken);
     }
 }

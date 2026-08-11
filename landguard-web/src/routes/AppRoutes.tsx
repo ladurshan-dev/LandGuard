@@ -4,6 +4,7 @@ import { FullScreenLoader } from '../components/FullScreenLoader';
 import { useAuth } from '../hooks/useAuth';
 import { DASHBOARD_PATH_BY_ROLE } from '../types/auth';
 import LoginPage from '../pages/auth/LoginPage';
+import RegisterPage from '../pages/auth/RegisterPage';
 import SellerDashboard from '../pages/seller/SellerDashboard';
 import BuyerDashboard from '../pages/buyer/BuyerDashboard';
 import AdminDashboard from '../pages/admin/AdminDashboard';
@@ -13,6 +14,7 @@ import SellerPropertyDetailsPage from '../pages/seller/properties/SellerProperty
 import BrowsePropertiesPage from '../pages/buyer/properties/BrowsePropertiesPage';
 import BuyerPropertyDetailsPage from '../pages/buyer/properties/BuyerPropertyDetailsPage';
 import AdminPropertiesPage from '../pages/admin/properties/AdminPropertiesPage';
+import AdminPropertyReviewPage from '../pages/admin/properties/AdminPropertyReviewPage';
 import AdminPropertyDetailsPage from '../pages/admin/properties/AdminPropertyDetailsPage';
 
 /**
@@ -49,6 +51,7 @@ export function AppRoutes() {
     <Routes>
       <Route path="/" element={<RootRedirect />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
 
       <Route
         path="/seller/dashboard"
@@ -127,6 +130,14 @@ export function AppRoutes() {
         element={
           <ProtectedRoute allowedRoles={['Admin']}>
             <AdminPropertiesPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/properties/review"
+        element={
+          <ProtectedRoute allowedRoles={['Admin']}>
+            <AdminPropertyReviewPage />
           </ProtectedRoute>
         }
       />

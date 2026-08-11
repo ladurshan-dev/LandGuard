@@ -13,14 +13,26 @@ namespace LandGuard.API.Controllers;
 /// AuthController/PropertyController established.
 ///
 /// Every endpoint requires a valid JWT - there is no anonymous access
-/// here, unlike PropertyController's public GetById/Search. Role
-/// enforcement is two-layered, matching the spec exactly: Buyer is
-/// read-only, so only the two GET actions allow it (the POST is gated to
-/// Seller/Admin by <see cref="AuthorizationPolicies.RequireSellerOrAdmin"/>
-/// at the attribute level); Seller-can-only-analyze-their-own-properties
-/// and Admin-has-full-access are both enforced inside
-/// FraudDetectionService, which is the only place that actually knows who
-/// owns which property.
+/// here, unlike PropertyController's public GetById/Search. All three
+/// actions are gated to Seller-or-Admin by
+/// <see cref="AuthorizationPolicies.RequireSellerOrAdmin"/> at the
+/// attribute level; Seller-can-only-analyze/read-their-own-properties
+/// (Analyze) or Seller-owner-or-Admin (GetReport/GetHistory, which also
+/// allow the owning Seller to read an Approved listing that started as
+/// someone else's - not applicable in practice since a Seller only ever
+/// owns their own listings) is enforced inside FraudDetectionService,
+/// which is the only place that actually knows who owns which property.
+///
+/// BUYER PRIVACY REQUIREMENT: GetReport/GetHistory used to also allow
+/// Buyer (bare <c>[Authorize]</c>, "read-only" access) - removed. Internal
+/// fraud-engine output (score, risk level, fraud status, rule-by-rule
+/// breakdown) must never reach a Buyer, even for an Approved listing;
+/// Approval is sufficient information for them. A Buyer viewing a
+/// property's normal listing details still works via
+/// PropertyController.GetById, which now separately redacts the same
+/// fields for a non-owner, non-Admin caller (see
+/// PropertyService.GetByIdAsync) - this controller no longer needs to
+/// reason about a Buyer caller at all.
 /// </summary>
 [ApiController]
 [Route("api/fraud")]
@@ -57,11 +69,12 @@ public class FraudController : ControllerBase
     }
 
     /// <summary>
-    /// GET /api/fraud/report/{propertyId} - any authenticated role
-    /// (Buyer read-only, Seller, Admin). Visible once the property is
-    /// Approved; otherwise only to its owner or an Admin.
+    /// GET /api/fraud/report/{propertyId} - Seller (own properties) or
+    /// Admin only. No longer Buyer-accessible (Buyer privacy requirement -
+    /// see this controller's own doc comment).
     /// </summary>
     [HttpGet("report/{propertyId:int}")]
+    [Authorize(Policy = AuthorizationPolicies.RequireSellerOrAdmin)]
     public async Task<IActionResult> GetReport(int propertyId, CancellationToken cancellationToken)
     {
         var result = await _fraudDetectionService.GetFraudReportAsync(
@@ -73,11 +86,12 @@ public class FraudController : ControllerBase
     }
 
     /// <summary>
-    /// GET /api/fraud/history/{propertyId} - any authenticated role
-    /// (Buyer read-only, Seller, Admin). Same visibility rule as
-    /// GetReport.
+    /// GET /api/fraud/history/{propertyId} - Seller (own properties) or
+    /// Admin only. No longer Buyer-accessible - same change as GetReport,
+    /// see this controller's own doc comment.
     /// </summary>
     [HttpGet("history/{propertyId:int}")]
+    [Authorize(Policy = AuthorizationPolicies.RequireSellerOrAdmin)]
     public async Task<IActionResult> GetHistory(int propertyId, CancellationToken cancellationToken)
     {
         var result = await _fraudDetectionService.GetFraudHistoryAsync(
