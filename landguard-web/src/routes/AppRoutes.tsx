@@ -1,10 +1,10 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { ProtectedRoute } from '../components/ProtectedRoute';
-import { FullScreenLoader } from '../components/FullScreenLoader';
-import { useAuth } from '../hooks/useAuth';
-import { DASHBOARD_PATH_BY_ROLE } from '../types/auth';
 import LoginPage from '../pages/auth/LoginPage';
 import RegisterPage from '../pages/auth/RegisterPage';
+import HomePage from '../pages/home/HomePage';
+import PublicBrowsePropertiesPage from '../pages/properties/PublicBrowsePropertiesPage';
+import PublicPropertyDetailsPage from '../pages/properties/PublicPropertyDetailsPage';
 import SellerDashboard from '../pages/seller/SellerDashboard';
 import BuyerDashboard from '../pages/buyer/BuyerDashboard';
 import AdminDashboard from '../pages/admin/AdminDashboard';
@@ -18,38 +18,36 @@ import AdminPropertyReviewPage from '../pages/admin/properties/AdminPropertyRevi
 import AdminPropertyDetailsPage from '../pages/admin/properties/AdminPropertyDetailsPage';
 
 /**
- * "/" itself: authenticated -> that user's own dashboard (via the single
- * DASHBOARD_PATH_BY_ROLE map - never a role === 'X' chain repeated per
- * file), unauthenticated -> /login. A tiny component of its own rather
- * than inlined in <Route element={...}>, purely so it can call useAuth()
- * the normal way.
- */
-function RootRedirect() {
-  const { isAuthenticated, isInitializing, user } = useAuth();
-
-  if (isInitializing) {
-    return <FullScreenLoader />;
-  }
-
-  if (isAuthenticated && user) {
-    return <Navigate to={DASHBOARD_PATH_BY_ROLE[user.role]} replace />;
-  }
-
-  return <Navigate to="/login" replace />;
-}
-
-/**
- * The application's full route table. Every dashboard route is wrapped in
- * ProtectedRoute with its own allowedRoles - a Buyer can never even
- * briefly render <SellerDashboard>, since ProtectedRoute checks
- * authentication and role before this component tree mounts its children
- * at all. Unknown paths fall back to "/", which then resolves correctly
- * for both authenticated and unauthenticated visitors.
+ * The application's full route table. "/" always renders the public
+ * HomePage, for both authenticated and unauthenticated visitors - there is
+ * deliberately no redirect-to-dashboard here anymore (previous behavior,
+ * removed per explicit product decision: a signed-in user clicking "Home"
+ * or landing on "/" should see the real homepage, not be bounced away from
+ * it). Getting to a role's dashboard from here is now the role-aware
+ * PublicNavbar's "Dashboard" button (see components/home/PublicNavbar),
+ * which reads the same DASHBOARD_PATH_BY_ROLE map LoginPage's own
+ * post-login redirect already uses.
+ *
+ * "/properties" and "/properties/:id" are new, additive, fully public
+ * routes (PublicBrowsePropertiesPage / PublicPropertyDetailsPage) backed by
+ * the same AllowAnonymous GET /api/properties[/:id] endpoints the
+ * protected Buyer routes below already use - they do not replace or
+ * weaken "/buyer/properties"/"/buyer/properties/:id", which remain
+ * ProtectedRoute-gated to an authenticated Buyer exactly as before.
+ *
+ * Every dashboard route is wrapped in ProtectedRoute with its own
+ * allowedRoles - a Buyer can never even briefly render <SellerDashboard>,
+ * since ProtectedRoute checks authentication and role before this
+ * component tree mounts its children at all. Unknown paths fall back to
+ * "/", which now resolves to the real homepage for every visitor instead
+ * of chaining through another redirect.
  */
 export function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<RootRedirect />} />
+      <Route path="/" element={<HomePage />} />
+      <Route path="/properties" element={<PublicBrowsePropertiesPage />} />
+      <Route path="/properties/:id" element={<PublicPropertyDetailsPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
 

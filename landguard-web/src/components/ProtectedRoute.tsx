@@ -2,6 +2,7 @@ import type { ReactElement } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { FullScreenLoader } from './FullScreenLoader';
 import { useAuth } from '../hooks/useAuth';
+import { DASHBOARD_PATH_BY_ROLE } from '../types/auth';
 import type { UserRole } from '../types/auth';
 
 interface ProtectedRouteProps {
@@ -23,11 +24,27 @@ interface ProtectedRouteProps {
  *    headed (`state.from`) so a future "return to where you were" flow
  *    has somewhere to read that from.
  * 3. Authenticated but role-restricted and not permitted - redirect to
- *    `/`, which itself resolves to that user's correct dashboard (see
- *    AppRoutes), rather than a dead end or a raw "access denied" page.
+ *    that user's OWN dashboard via DASHBOARD_PATH_BY_ROLE (e.g. a Buyer
+ *    hitting "/seller/properties" lands on "/buyer/dashboard"), not to
+ *    "/". Security is unaffected either way - the protected content below
+ *    this guard is never rendered for a role mismatch, full stop - this is
+ *    purely about where they land afterward.
+ *
+ *    Historical note (public homepage change): "/" used to be a
+ *    RootRedirect component that immediately sent any authenticated user
+ *    to their dashboard, so redirecting a role-mismatched user to "/" and
+ *    redirecting them to their dashboard were the same thing. "/" is now
+ *    the actual public HomePage for every visitor (see AppRoutes.tsx) and
+ *    no longer redirects anyone anywhere. Redirecting a role mismatch to
+ *    "/" today would land a signed-in user on the public marketing page
+ *    instead of their own dashboard - a UX regression, not a security one -
+ *    so this now reads DASHBOARD_PATH_BY_ROLE directly instead, preserving
+ *    the original "send them back to where they belong" intent. Falls back
+ *    to "/" only in the practically-unreachable case where `user` is
+ *    somehow null despite `isAuthenticated` being true.
  */
 export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) {
-  const { isAuthenticated, isInitializing, hasRole } = useAuth();
+  const { isAuthenticated, isInitializing, hasRole, user } = useAuth();
   const location = useLocation();
 
   if (isInitializing) {
@@ -39,7 +56,7 @@ export function ProtectedRoute({ children, allowedRoles }: ProtectedRouteProps) 
   }
 
   if (allowedRoles && allowedRoles.length > 0 && !hasRole(...allowedRoles)) {
-    return <Navigate to="/" replace />;
+    return <Navigate to={user ? DASHBOARD_PATH_BY_ROLE[user.role] : '/'} replace />;
   }
 
   return children;
