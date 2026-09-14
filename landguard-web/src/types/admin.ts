@@ -62,3 +62,91 @@ export interface ApprovePropertyRequest {
 export interface RejectPropertyRequest {
   reason: string;
 }
+
+/**
+ * Types for the Admin Fraud Dashboard (GET /api/admin/dashboard) - direct
+ * mirrors of LandGuard.Application.DTOs.Admin.AdminFraudDashboardResponse
+ * and its nested sections, the same "nothing invented beyond what the
+ * backend actually returns" convention every type in this file already
+ * follows.
+ *
+ * Risk vs deed verification are deliberately separate sections below and
+ * must never be combined in the UI - High Risk does not mean Fraudulent,
+ * Low Risk does not mean Verified. See AdminFraudDashboardResponse's own
+ * doc comment.
+ */
+export interface AdminDashboardUserStatistics {
+  totalBuyers: number;
+  totalSellers: number;
+  verifiedSellers: number;
+  suspendedUsers: number;
+}
+
+/** Current Property.Status counts (live, not the legacy vw_FraudStatistics figures - see the backend DTO's own doc comment). */
+export interface AdminDashboardPropertyStatistics {
+  total: number;
+  approved: number;
+  pending: number;
+  flagged: number;
+  rejected: number;
+  withdrawn: number;
+  disapproved: number;
+}
+
+/** Counts only the LATEST DeedVerification run per property - never raw historical-row counts. */
+export interface AdminDashboardDeedVerificationStatistics {
+  total: number;
+  verified: number;
+  formMismatch: number;
+  fraudulent: number;
+  priceAnomaly: number;
+  duplicateProperty: number;
+  unverified: number;
+  unverifiedCancelled: number;
+}
+
+/** Legacy numeric fraud/risk-engine figures (dbo.vw_FraudStatistics) - a supporting indicator, independent of deed verification. */
+export interface AdminDashboardRiskStatistics {
+  low: number;
+  medium: number;
+  high: number;
+  /** Null if no listing has been analysed yet. */
+  averageRiskScore: number | null;
+}
+
+/** One row of the Fraud Rule Trigger Frequency table (dbo.vw_RuleTriggerFrequency) - nothing recalculated client-side. */
+export interface AdminDashboardRuleTriggerItem {
+  ruleCode: string;
+  ruleName: string;
+  weight: number;
+  timesTriggered: number;
+  timesEvaluated: number;
+  /** Null if timesEvaluated is 0. */
+  triggerRatePercent: number | null;
+}
+
+/**
+ * One row of the "Requires Attention" table - a deliberately minimal
+ * projection (top 10, RiskScore DESC then UploadDate ASC). Privacy:
+ * carries no Seller NIC, Owner NIC, deed reference, OCR text, Government
+ * Registry values, or contact information - only these seven fields.
+ */
+export interface AdminDashboardReviewPropertySummary {
+  propertyId: number;
+  title: string;
+  status: PropertyStatus;
+  riskScore: number | null;
+  riskLevel: RiskLevel;
+  daysWaiting: number;
+  openReportCount: number;
+}
+
+/** GET /api/admin/dashboard's whole response body. */
+export interface AdminFraudDashboardResponse {
+  users: AdminDashboardUserStatistics;
+  properties: AdminDashboardPropertyStatistics;
+  deedVerification: AdminDashboardDeedVerificationStatistics;
+  risk: AdminDashboardRiskStatistics;
+  ruleTriggers: AdminDashboardRuleTriggerItem[];
+  reviewProperties: AdminDashboardReviewPropertySummary[];
+}

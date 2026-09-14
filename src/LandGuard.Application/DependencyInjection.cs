@@ -78,6 +78,15 @@ public static class DependencyInjection
         // Property.Status transition.
         services.AddScoped<IAdminModerationService, AdminModerationService>();
 
+        // Admin Fraud Dashboard: read-only reporting over existing
+        // Properties/DeedVerifications/FraudStatistics/
+        // RuleTriggerFrequencies/FlaggedProperties infrastructure - kept
+        // deliberately separate from both IFraudDetectionService
+        // (per-property analysis) and IAdminModerationService
+        // (approve/reject workflow) - see IAdminDashboardService's own
+        // doc comment.
+        services.AddScoped<IAdminDashboardService, AdminDashboardService>();
+
         return services;
     }
 }

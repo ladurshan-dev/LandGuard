@@ -1,7 +1,12 @@
 import { apiClient } from '../api/axios';
 import { toApiError } from '../utils/apiError';
 import type { PropertyListingResult } from '../types/property';
-import type { ApprovePropertyRequest, PropertyReviewQueueItem, RejectPropertyRequest } from '../types/admin';
+import type {
+  AdminFraudDashboardResponse,
+  ApprovePropertyRequest,
+  PropertyReviewQueueItem,
+  RejectPropertyRequest,
+} from '../types/admin';
 
 /**
  * The data-access layer for Admin Property Moderation - HTTP calls only,
@@ -67,6 +72,22 @@ export async function rejectProperty(
       `/admin/properties/${propertyId}/reject`,
       request,
     );
+
+    return response.data;
+  } catch (error) {
+    throw toApiError(error);
+  }
+}
+
+/**
+ * GET /api/admin/dashboard (RequireAdmin policy). The Admin Fraud
+ * Dashboard's whole payload - Users/Properties/DeedVerification/Risk/
+ * RuleTriggers/ReviewProperties - a single read-only aggregation, no
+ * request body.
+ */
+export async function getFraudDashboard(): Promise<AdminFraudDashboardResponse> {
+  try {
+    const response = await apiClient.get<AdminFraudDashboardResponse>('/admin/dashboard');
 
     return response.data;
   } catch (error) {
