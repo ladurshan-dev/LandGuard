@@ -4,6 +4,7 @@ import { HomeSearch } from '../../components/home/HomeSearch';
 import { HomeFeatures } from '../../components/home/HomeFeatures';
 import { HomeFeaturedProperties } from '../../components/home/HomeFeaturedProperties';
 import { HomeHowItWorks } from '../../components/home/HomeHowItWorks';
+import { HomePodcast } from '../../components/home/HomePodcast';
 import { HomeSafety } from '../../components/home/HomeSafety';
 import { HomeCta } from '../../components/home/HomeCta';
 
@@ -23,6 +24,7 @@ export default function HomePage() {
       <HomeFeatures />
       <HomeFeaturedProperties />
       <HomeHowItWorks />
+      <HomePodcast />
       <HomeSafety />
       <HomeCta />
     </PublicLayout>
